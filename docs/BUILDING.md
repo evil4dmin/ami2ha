@@ -1,0 +1,93 @@
+# Building ami2ha
+
+## Quick start
+
+```sh
+./tools/setup-toolchain.sh   # once, ~5-10 minutes
+make                         # cross-compile build/ami2ha
+make test                    # run the portable core tests on this machine
+```
+
+Nothing needs root. Everything lands in `~/opt/amiga` and `~/src/ami2ha-toolchain`.
+
+## What the setup script installs
+
+| Component | Source | Why |
+|---|---|---|
+| vbcc 0.9hP2 | phoenix.owl.de | The C compiler. Actively maintained by Volker Barthelmann, and the standard choice for AmigaOS. |
+| vasm, vlink | sun.hasenbraten.de | Assembler and linker; produce AmigaOS hunk executables directly. |
+| vbcc AmigaOS target | phoenix.owl.de | C library, startup code, `amiga.lib`. |
+| AmigaOS NDK headers | [sacredbanana/AmigaSDK-gcc](https://github.com/sacredbanana/AmigaSDK-gcc) | `exec/`, `dos/`, `intuition/`, `rexx/`, and the Roadshow network headers. vbcc ships a C library but no OS headers. |
+| MUI 3.8 developer includes | [Aminet](https://aminet.net/dev/mui/mui38dev.lha) | `libraries/mui.h` and the muimaster stubs. |
+| AmiSSL SDK | [jens-maus/amissl](https://github.com/jens-maus/amissl) | Optional, for `https://` endpoints. |
+
+Note that GCC is *not* used. bebbo's `amiga-gcc`, long the popular choice,
+disappeared from GitHub; vbcc is maintained and downloadable, which matters
+more for a project meant to be built by other people. The sources avoid
+compiler-specific extensions, so adding a GCC path later is a Makefile
+change, not a rewrite.
+
+### Two fixes the script applies
+
+Both are worth knowing about if you assemble a toolchain by hand:
+
+- **vbcc must be built with strict `-std=c99`.** In its GNU modes clang
+  reserves `asm` as a keyword, and vbcc's `supp.h` uses it as an ordinary
+  parameter name.
+- **The NDK is merged with `cp -n` (no-clobber).** vbcc's own `proto/` and
+  `inline/` headers use its register-argument syntax; the NDK carries the GCC
+  flavour. Existing vbcc files must win, with the NDK only filling gaps.
+  A plain `cp -R` produces a toolchain that fails to link.
+
+The script also drops a small `sys/errno.h` that includes `<errno.h>`, which
+the Roadshow network headers expect but vbcc does not provide.
+
+## Build options
+
+Set these on the command line or edit `config.mk`:
+
+```sh
+make CPU=68020        # better code; drops stock A500/A600 support
+make OPT=1            # lower optimisation, faster builds
+make USE_AMISSL=1     # link AmiSSL for https:// endpoints
+make VBCC=/opt/amiga  # toolchain installed somewhere else
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `VBCC` | `~/opt/amiga` | Toolchain root, containing `bin/`, `config/`, `targets/` |
+| `VC_CONFIG` | `aos68k` | vbcc target config. `aos68k` = AmigaOS 3.x, standard C library |
+| `CPU` | `68000` | Minimum CPU |
+| `OPT` | `2` | vbcc optimisation level |
+| `USE_AMISSL` | `0` | Build TLS support |
+| `HOSTCC` | `cc` | Compiler for the host test runner |
+
+## The portability split
+
+`src/core/` is plain C99 with no Amiga headers and no OS calls. It is
+compiled twice: once by the cross-compiler into the Amiga binary, and once by
+the host compiler into `tests/run-tests`. Everything else in `src/` is
+Amiga-only and includes `ami2ha/compat.h` first.
+
+This is what makes `make test` worth having. Protocol and parsing bugs — the
+kind that are miserable to debug through an emulator — surface in about a
+second on your development machine, against the same object code semantics
+the Amiga will run.
+
+When adding code, ask whether it needs the OS. If it does not, it belongs in
+`src/core/` with a test.
+
+## Compiler warnings
+
+vbcc emits two warnings in bulk from third-party headers: 53 (anonymous union
+members in the NDK's `devices/timer.h`) and 226 (typedef redeclarations
+between the NDK and vbcc's C library). This vbcc build refuses to suppress
+either via `-dontwarn`, so the Makefile filters them out of the log. Warnings
+from our own code are not filtered.
+
+## Testing on an Amiga
+
+`build/ami2ha` is a standard AmigaOS hunk executable. Copy it to a real
+machine, or to an emulator — [vAmiga](https://vamiga.me) (`brew install
+vamiga`) and FS-UAE both work. You will need MUI and a TCP/IP stack installed
+in the emulated environment.

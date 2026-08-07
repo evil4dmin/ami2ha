@@ -1,0 +1,14 @@
+build/
+tests/run-tests
+tests/*.dSYM/
+*.o
+*.lha
+*.info
+
+# Local toolchain overrides; config.mk itself is tracked.
+config.local.mk
+
+.DS_Store
+
+# Unrelated third-party checkout that lives in this directory.
+amiagent/
