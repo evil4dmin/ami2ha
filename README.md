@@ -6,10 +6,11 @@ Control your smart home from a real Amiga: read sensors, watch entity states,
 flip switches and dimmers — from a fully configurable MUI dashboard, with an
 ARexx port so the rest of your Workbench can join in.
 
-> **Status: early development.** The full stack from TCP up to live entity
-> updates works, and there is a runnable command line client. The MUI
-> dashboard and the ARexx port are not written yet — see
-> [Roadmap](#roadmap).
+> **Status: early development.** The full stack works — TCP, WebSocket,
+> authentication, live updates, and a MUI dashboard driven by a
+> configuration file. The ARexx port and the in-app dashboard editor are
+> not written yet. **None of it has been run against a real Home Assistant
+> yet**, only against tests; see [Roadmap](#roadmap).
 
 ## Target systems
 
@@ -100,6 +101,39 @@ ami2ha homeassistant.local TOKENFILE=S:ha.token WATCH
 `TOKEN`: a token on the command line ends up in your shell history and is
 visible in the task list.
 
+## The dashboard
+
+Widgets are bound to entities explicitly, one per line, so a dashboard is a
+readable file you can diff and share:
+
+```
+group "Wohnzimmer"
+    sensor sensor.wz_temperatur label "Temperatur"
+    gauge  sensor.wz_co2 label "CO2" min 400 max 2000
+    toggle light.wohnzimmer label "Licht"
+end
+
+group "Szenen"
+    button scene.turn_on entity scene.gute_nacht label "Gute Nacht"
+end
+```
+
+You should not have to type two hundred entity IDs, so generate a starting
+point from your own instance and prune it:
+
+```
+ami2ha homeassistant.local TOKENFILE=S:ha.token WRITECONFIG=S:ami2ha.cfg
+ami2ha CONFIG=S:ami2ha.cfg GUI
+```
+
+Widget kinds are `sensor`, `toggle`, `gauge`, `button` and `text`. See
+[examples/dashboard.cfg](examples/dashboard.cfg) for a worked example.
+
+The window updates from the WebSocket push, so readings change by
+themselves without polling. While idle the application uses no CPU at all:
+MUI hands its signal mask to `WaitSelect`, so one `Wait()` covers the GUI,
+the socket and Ctrl-C together.
+
 ## Connecting
 
 ami2ha talks to Home Assistant's
@@ -130,8 +164,10 @@ entity changes. The command set is designed in
 - [x] Home Assistant client: authentication, `subscribe_events`, `get_states`, `call_service`
 - [x] Entity store
 - [x] Command line client (`LIST`, `GET`, `WATCH`, `TOGGLE`, `ON`, `OFF`)
-- [ ] MUI dashboard with user-configurable widgets
-- [ ] Dashboard editor and preferences
+- [x] Dashboard configuration format, parser and generator
+- [x] MUI dashboard: sensors, gauges, toggles, buttons, live updates
+- [ ] In-app dashboard editor
+- [ ] Reconnect handling and connection status UI
 - [ ] ARexx host port
 - [ ] Optional AmiSSL support
 - [ ] Installer, icons, documentation

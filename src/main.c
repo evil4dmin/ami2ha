@@ -18,6 +18,7 @@
 #include "ami2ha/cfgfile.h"
 #include "ami2ha/ha.h"
 #include "ami2ha/net.h"
+#include "ami2ha/ui.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,7 +26,7 @@
 
 #define TEMPLATE                                                        \
     "HOST,PORT/N,TOKEN/K,TOKENFILE/K,CONFIG/K,WRITECONFIG/K,"          \
-    "LIST/S,WATCH/S,GET/K,TOGGLE/K,ON/K,OFF/K,DOMAIN/K,TIMEOUT/N/K"
+    "GUI/S,LIST/S,WATCH/S,GET/K,TOGGLE/K,ON/K,OFF/K,DOMAIN/K,TIMEOUT/N/K"
 
 struct cli_args {
     STRPTR host;
@@ -34,6 +35,7 @@ struct cli_args {
     STRPTR tokenfile;
     STRPTR config;
     STRPTR writeconfig;
+    LONG   gui;
     LONG   list;
     LONG   watch;
     STRPTR get;
@@ -45,11 +47,12 @@ struct cli_args {
 };
 
 struct app {
-    ha_client  ha;
-    a2h_socket sock;
-    int        ready;
-    int        failed;
-    int        watching;
+    ha_client   ha;
+    a2h_socket  sock;
+    a2h_ui     *ui;      /* NULL in command line mode */
+    int         ready;
+    int         failed;
+    int         watching;
 };
 
 /* ------------------------------------------------------------------ */
@@ -57,8 +60,16 @@ struct app {
 static void cb_ready(ha_client *c, void *user)
 {
     struct app *a = (struct app *)user;
-    A2H_UNUSED(c);
+
     a->ready = 1;
+    if (a->ui) {
+        char msg[96];
+        sprintf(msg, "Connected -- Home Assistant %s, %lu entities",
+                c->version[0] ? c->version : "?",
+                (unsigned long)ha_store_count(&c->store));
+        ui_set_status(a->ui, msg);
+        ui_refresh_all(a->ui);
+    }
 }
 
 static void cb_failed(ha_client *c, const char *msg, void *user)
@@ -66,13 +77,21 @@ static void cb_failed(ha_client *c, const char *msg, void *user)
     struct app *a = (struct app *)user;
     A2H_UNUSED(c);
     a->failed = 1;
-    printf("ami2ha: %s\n", msg);
+    if (a->ui)
+        ui_set_status(a->ui, msg);
+    else
+        printf("ami2ha: %s\n", msg);
 }
 
 static void cb_changed(ha_client *c, ha_entity *e, void *user)
 {
     struct app *a = (struct app *)user;
     A2H_UNUSED(c);
+
+    if (a->ui) {
+        ui_entity_changed(a->ui, e);
+        return;
+    }
 
     /* Only chatter once live; the initial load would otherwise print the
      * entire installation. */
@@ -318,6 +337,32 @@ int main(void)
     }
     if (rc == NET_OK)
         ha_client_begin(&app.ha);
+
+    /* --- GUI mode owns the event loop from here --- */
+    if (args.gui) {
+        char uierr[128];
+
+        if (dash->nwidgets == 0) {
+            printf("ami2ha: GUI needs a CONFIG file describing the dashboard\n"
+                   "  Generate one first:\n"
+                   "    ami2ha %s TOKENFILE=... WRITECONFIG=S:ami2ha.cfg\n",
+                   cfg.host);
+            rc_exit = RETURN_ERROR;
+            goto cleanup;
+        }
+
+        app.ui = ui_create(dash, &app.ha, &app.sock, uierr, sizeof uierr);
+        if (!app.ui) {
+            printf("ami2ha: %s\n", uierr);
+            rc_exit = RETURN_FAIL;
+            goto cleanup;
+        }
+
+        rc_exit = ui_run(app.ui);
+        ui_dispose(app.ui);
+        app.ui = NULL;
+        goto cleanup;
+    }
 
     /* --- run until ready, or until the timeout expires --- */
     deadline_ms = args.timeout ? *args.timeout * 1000L : 20000L;
