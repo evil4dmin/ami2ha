@@ -15,6 +15,7 @@
 
 #include <proto/intuition.h>
 
+#include "ami2ha/cfgfile.h"
 #include "ami2ha/ha.h"
 #include "ami2ha/net.h"
 
@@ -23,14 +24,16 @@
 #include <string.h>
 
 #define TEMPLATE                                                        \
-    "HOST/A,PORT/N,TOKEN/K,TOKENFILE/K,LIST/S,WATCH/S,GET/K,"          \
-    "TOGGLE/K,ON/K,OFF/K,DOMAIN/K,TIMEOUT/N/K"
+    "HOST,PORT/N,TOKEN/K,TOKENFILE/K,CONFIG/K,WRITECONFIG/K,"          \
+    "LIST/S,WATCH/S,GET/K,TOGGLE/K,ON/K,OFF/K,DOMAIN/K,TIMEOUT/N/K"
 
 struct cli_args {
     STRPTR host;
     LONG  *port;
     STRPTR token;
     STRPTR tokenfile;
+    STRPTR config;
+    STRPTR writeconfig;
     LONG   list;
     LONG   watch;
     STRPTR get;
@@ -108,33 +111,6 @@ static void list_entities(ha_client *c, const char *domain)
         n++;
     }
     printf("\n%d entit%s\n", n, n == 1 ? "y" : "ies");
-}
-
-/* Read a long-lived token from a file, so it need not appear in the
- * command line (where it would sit in shell history and in the task list). */
-static int read_token_file(const char *path, char *dst, size_t dstsz)
-{
-    BPTR  fh;
-    LONG  n;
-    size_t i;
-
-    fh = Open((STRPTR)path, MODE_OLDFILE);
-    if (!fh)
-        return 0;
-
-    n = Read(fh, dst, (LONG)(dstsz - 1));
-    Close(fh);
-    if (n <= 0)
-        return 0;
-
-    dst[n] = '\0';
-    for (i = 0; i < (size_t)n; i++) {
-        if (dst[i] == '\n' || dst[i] == '\r' || dst[i] == ' ' || dst[i] == '\t') {
-            dst[i] = '\0';
-            break;
-        }
-    }
-    return dst[0] != '\0';
 }
 
 /* Write whatever the client has queued, keeping what would not fit. */
@@ -228,6 +204,11 @@ int main(void)
     struct app      app;
     ha_config       cfg;
     ha_callbacks    cb;
+    /* On the heap, not the stack: this struct is tens of kilobytes and an
+     * AmigaDOS shell hands a program only a few KB of stack. A 68k stack
+     * frame that large also overflows the 16-bit displacement the
+     * addressing modes allow. */
+    a2h_config     *dash = NULL;
     char            token[HA_TOKEN_MAX];
     long            deadline_ms;
     int             rc_exit = RETURN_OK;
@@ -240,28 +221,64 @@ int main(void)
         return RETURN_ERROR;
     }
 
-    /* --- configuration --- */
-    memset(&cfg, 0, sizeof cfg);
-    strncpy(cfg.host, (const char *)args.host, sizeof cfg.host - 1);
-    cfg.port = args.port ? (int)*args.port : 8123;
-    strcpy(cfg.path, "/api/websocket");
-
-    token[0] = '\0';
-    if (args.tokenfile) {
-        if (!read_token_file((const char *)args.tokenfile, token, sizeof token)) {
-            printf("ami2ha: cannot read token from %s\n", (char *)args.tokenfile);
+    /* --- configuration: the file supplies defaults, the command line wins --- */
+    dash = (a2h_config *)malloc(sizeof *dash);
+    if (!dash) {
+        printf("ami2ha: out of memory\n");
+        FreeArgs(rda);
+        return RETURN_FAIL;
+    }
+    cfg_init(dash);
+    if (args.config) {
+        char cfgerr[CFG_ERR_MAX];
+        if (!cfg_load_file(dash, (const char *)args.config, cfgerr, sizeof cfgerr)) {
+            printf("ami2ha: %s\n", cfgerr);
+            free(dash);
             FreeArgs(rda);
             return RETURN_ERROR;
         }
-    } else if (args.token) {
+    }
+
+    memset(&cfg, 0, sizeof cfg);
+    strcpy(cfg.path, "/api/websocket");
+
+    if (args.host)
+        strncpy(cfg.host, (const char *)args.host, sizeof cfg.host - 1);
+    else if (dash->host[0])
+        strncpy(cfg.host, dash->host, sizeof cfg.host - 1);
+    else {
+        printf("ami2ha: need a HOST, either as an argument or in a CONFIG file\n");
+        free(dash);
+        FreeArgs(rda);
+        return RETURN_ERROR;
+    }
+
+    cfg.port = args.port ? (int)*args.port : (dash->port ? dash->port : 8123);
+
+    token[0] = '\0';
+    if (args.token) {
         strncpy(token, (const char *)args.token, sizeof token - 1);
         token[sizeof token - 1] = '\0';
     } else {
-        printf("ami2ha: need TOKEN or TOKENFILE\n"
-               "  Create a long-lived access token in Home Assistant under\n"
-               "  your profile, then keep it in a file: TOKENFILE=S:ha.token\n");
-        FreeArgs(rda);
-        return RETURN_ERROR;
+        const char *tf = args.tokenfile ? (const char *)args.tokenfile
+                                        : (dash->tokenfile[0] ? dash->tokenfile : NULL);
+        if (tf) {
+            if (!cfg_read_token_file(tf, token, sizeof token)) {
+                printf("ami2ha: cannot read token from %s\n", tf);
+                free(dash);
+                FreeArgs(rda);
+                return RETURN_ERROR;
+            }
+        } else if (dash->token[0]) {
+            strncpy(token, dash->token, sizeof token - 1);
+        } else {
+            printf("ami2ha: need TOKEN or TOKENFILE\n"
+                   "  Create a long-lived access token in Home Assistant under\n"
+                   "  your profile, then keep it in a file: TOKENFILE=S:ha.token\n");
+            free(dash);
+            FreeArgs(rda);
+            return RETURN_ERROR;
+        }
     }
     strncpy(cfg.token, token, sizeof cfg.token - 1);
 
@@ -278,12 +295,14 @@ int main(void)
     rc = net_lib_open();
     if (rc != NET_OK) {
         printf("ami2ha: %s\n", net_error_text(rc));
+        free(dash);
         FreeArgs(rda);
         return RETURN_FAIL;
     }
 
     if (!ha_client_init(&app.ha, &cfg, &cb, make_seed())) {
         printf("ami2ha: out of memory\n");
+        free(dash);
         net_lib_close();
         FreeArgs(rda);
         return RETURN_FAIL;
@@ -323,6 +342,33 @@ int main(void)
            (unsigned long)ha_store_count(&app.ha.store));
 
     /* --- one-shot actions --- */
+    if (args.writeconfig) {
+        a2h_buf out;
+        char    werr[CFG_ERR_MAX];
+
+        if (!dash->host[0])
+            strncpy(dash->host, cfg.host, sizeof dash->host - 1);
+        dash->port = cfg.port;
+        if (!dash->tokenfile[0] && args.tokenfile)
+            strncpy(dash->tokenfile, (const char *)args.tokenfile,
+                    sizeof dash->tokenfile - 1);
+
+        buf_init(&out);
+        if (!cfg_generate(&out, &app.ha.store, dash)) {
+            printf("ami2ha: out of memory generating configuration\n");
+            rc_exit = RETURN_FAIL;
+        } else if (!cfg_write_file((const char *)args.writeconfig, &out,
+                                   werr, sizeof werr)) {
+            printf("ami2ha: %s\n", werr);
+            rc_exit = RETURN_FAIL;
+        } else {
+            printf("wrote %s (%lu entities, prune it to taste)\n",
+                   (char *)args.writeconfig,
+                   (unsigned long)ha_store_count(&app.ha.store));
+        }
+        buf_free(&out);
+    }
+
     if (args.get) {
         ha_entity *e = ha_store_get(&app.ha.store, (const char *)args.get);
         if (e) {
@@ -359,6 +405,7 @@ int main(void)
     }
 
 cleanup:
+    free(dash);
     net_disconnect(&app.sock);
     ha_client_free(&app.ha);
     net_lib_close();

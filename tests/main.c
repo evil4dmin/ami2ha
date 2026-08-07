@@ -17,6 +17,7 @@ void suite_ws(void);
 void suite_entity(void);
 void suite_http(void);
 void suite_ha(void);
+void suite_config(void);
 
 int main(void)
 {
@@ -30,6 +31,7 @@ int main(void)
     printf("entity\n"); suite_entity();
     printf("http\n");   suite_http();
     printf("ha\n");     suite_ha();
+    printf("config\n"); suite_config();
 
     printf("\n%d checks, %d failures\n", tt_checks, tt_failures);
     return tt_failures ? 1 : 0;
