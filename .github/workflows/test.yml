@@ -1,0 +1,33 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core:
+    name: portable core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # src/core/ is plain C99 with no Amiga dependencies, so the whole
+      # protocol and parsing layer can be tested without a cross-toolchain.
+      # Building it on two platforms also catches accidental reliance on
+      # a particular compiler or word size.
+      - name: Run core tests
+        run: make test
+
+      - name: Rebuild with strict warnings
+        run: |
+          for f in src/core/*.c; do
+            echo "  $f"
+            cc -std=c99 -pedantic -Wall -Wextra -Werror -Wshadow \
+               -Iinclude -c "$f" -o /dev/null
+          done
