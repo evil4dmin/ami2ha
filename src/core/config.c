@@ -1,6 +1,8 @@
 /* ami2ha -- dashboard configuration parser */
 #include "ami2ha/config.h"
 
+#include "ami2ha/charset.h"
+
 #include <limits.h>
 #include <string.h>
 
@@ -195,6 +197,17 @@ static void copy_str(char *dst, size_t dstsz, const char *src)
     dst[n] = '\0';
 }
 
+/*
+ * Copy a string that will be shown on screen. The dashboard file may have
+ * been saved as UTF-8 by an editor on a modern machine or as Latin-1 on the
+ * Amiga; both must display correctly, so run display text through the
+ * transcoder while leaving entity ids and service names alone.
+ */
+static void copy_text(char *dst, size_t dstsz, const char *src)
+{
+    charset_utf8_to_latin1(dst, dstsz, src, strlen(src));
+}
+
 /* ------------------------------------------------------------------ *
  * Widget lines
  * ------------------------------------------------------------------ */
@@ -259,7 +272,7 @@ static void parse_widget(cfg_scan *s, a2h_config *cfg, widget_kind kind)
         if (kind == W_BUTTON)
             copy_str(w->service, sizeof w->service, tok);
         else if (kind == W_TEXT)
-            copy_str(w->label, sizeof w->label, tok), have_label = 1;
+            copy_text(w->label, sizeof w->label, tok), have_label = 1;
         else
             copy_str(w->entity, sizeof w->entity, tok);
     } else if (kind != W_TEXT) {
@@ -275,7 +288,7 @@ static void parse_widget(cfg_scan *s, a2h_config *cfg, widget_kind kind)
                 cfg_fail(s, "label needs a value", NULL);
                 return;
             }
-            copy_str(w->label, sizeof w->label, val);
+            copy_text(w->label, sizeof w->label, val);
             have_label = 1;
         } else if (strcmp(tok, "entity") == 0) {
             if (!next_token(s, val, sizeof val)) {
@@ -366,7 +379,7 @@ int cfg_parse(a2h_config *cfg, const char *text, size_t len,
             memset(g, 0, sizeof *g);
             g->first_widget = cfg->nwidgets;
             if (next_token(&s, tok, sizeof tok))
-                copy_str(g->title, sizeof g->title, tok);
+                copy_text(g->title, sizeof g->title, tok);
             cfg->ngroups++;
             in_group = 1;
 

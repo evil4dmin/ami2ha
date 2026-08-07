@@ -3,6 +3,8 @@
  */
 #include "ami2ha/json.h"
 
+#include "ami2ha/charset.h"
+
 #include <limits.h>
 #include <string.h>
 
@@ -272,66 +274,6 @@ int json_key_is(const json_token *tok, const char *literal)
     }
 }
 
-/*
- * Codepoints outside Latin-1 that turn up in real Home Assistant friendly
- * names and units, mapped to something an Amiga font can actually draw.
- */
-static const struct {
-    unsigned long cp;
-    const char   *rep;
-} cp_folds[] = {
-    { 0x2018, "'" },  { 0x2019, "'" },   /* single curly quotes  */
-    { 0x201A, "'" },  { 0x201B, "'" },
-    { 0x201C, "\"" }, { 0x201D, "\"" },  /* double curly quotes  */
-    { 0x201E, "\"" }, { 0x201F, "\"" },
-    { 0x2010, "-" },  { 0x2011, "-" },
-    { 0x2012, "-" },  { 0x2013, "-" },   /* en dash              */
-    { 0x2014, "-" },  { 0x2015, "-" },   /* em dash              */
-    { 0x2022, "*" },                     /* bullet               */
-    { 0x2026, "..." },                   /* ellipsis             */
-    { 0x202F, " " },  { 0x2009, " " },   /* narrow/thin space    */
-    { 0x20AC, "EUR" },                   /* euro sign            */
-    { 0x2103, "\xB0" "C" },              /* degree celsius glyph */
-    { 0x2109, "\xB0" "F" },
-    { 0x00B5, "\xB5" },                  /* micro sign           */
-    { 0x03BC, "\xB5" }                   /* greek mu -> micro    */
-};
-
-typedef struct {
-    char  *dst;
-    size_t cap;
-    size_t n;
-} strout;
-
-static void out_byte(strout *o, unsigned char c)
-{
-    if (o->n + 1 < o->cap)
-        o->dst[o->n++] = (char)c;
-}
-
-static void out_str(strout *o, const char *s)
-{
-    while (*s)
-        out_byte(o, (unsigned char)*s++);
-}
-
-static void out_cp(strout *o, unsigned long cp)
-{
-    size_t i;
-
-    if (cp < 0x100) { /* Latin-1 is exactly U+0000..U+00FF */
-        out_byte(o, (unsigned char)cp);
-        return;
-    }
-    for (i = 0; i < sizeof cp_folds / sizeof cp_folds[0]; i++) {
-        if (cp_folds[i].cp == cp) {
-            out_str(o, cp_folds[i].rep);
-            return;
-        }
-    }
-    out_byte(o, '?');
-}
-
 static int hex4(const char *p, unsigned long *out)
 {
     unsigned long v = 0;
@@ -351,12 +293,10 @@ static int hex4(const char *p, unsigned long *out)
 
 size_t json_str_copy(const json_token *tok, char *dst, size_t dstsz)
 {
-    strout      o;
+    charset_out o;
     const char *p, *end;
 
-    o.dst = dst;
-    o.cap = dstsz;
-    o.n   = 0;
+    charset_out_init(&o, dst, dstsz);
 
     if (dstsz == 0)
         return 0;
@@ -376,19 +316,19 @@ size_t json_str_copy(const json_token *tok, char *dst, size_t dstsz)
             if (p >= end)
                 break;
             switch (*p) {
-            case 'n': out_byte(&o, '\n'); p++; break;
-            case 't': out_byte(&o, '\t'); p++; break;
-            case 'r': out_byte(&o, '\r'); p++; break;
-            case 'b': out_byte(&o, '\b'); p++; break;
-            case 'f': out_byte(&o, '\f'); p++; break;
-            case '"': out_byte(&o, '"');  p++; break;
-            case '\\': out_byte(&o, '\\'); p++; break;
-            case '/': out_byte(&o, '/');  p++; break;
+            case 'n': charset_put_byte(&o, '\n'); p++; break;
+            case 't': charset_put_byte(&o, '\t'); p++; break;
+            case 'r': charset_put_byte(&o, '\r'); p++; break;
+            case 'b': charset_put_byte(&o, '\b'); p++; break;
+            case 'f': charset_put_byte(&o, '\f'); p++; break;
+            case '"': charset_put_byte(&o, '"');  p++; break;
+            case '\\': charset_put_byte(&o, '\\'); p++; break;
+            case '/': charset_put_byte(&o, '/');  p++; break;
             case 'u': {
                 unsigned long cp;
                 p++;
                 if (end - p < 4 || !hex4(p, &cp)) {
-                    out_byte(&o, '?');
+                    charset_put_byte(&o, '?');
                     break;
                 }
                 p += 4;
@@ -401,11 +341,11 @@ size_t json_str_copy(const json_token *tok, char *dst, size_t dstsz)
                         p += 6;
                     }
                 }
-                out_cp(&o, cp);
+                charset_put_cp(&o, cp);
                 break;
             }
             default:
-                out_byte(&o, (unsigned char)*p);
+                charset_put_byte(&o, (unsigned char)*p);
                 p++;
                 break;
             }
@@ -413,7 +353,7 @@ size_t json_str_copy(const json_token *tok, char *dst, size_t dstsz)
         }
 
         if (c < 0x80) {
-            out_byte(&o, c);
+            charset_put_byte(&o, c);
             p++;
             continue;
         }
@@ -426,7 +366,7 @@ size_t json_str_copy(const json_token *tok, char *dst, size_t dstsz)
             if ((c & 0xE0) == 0xC0) {      cp = c & 0x1FUL; extra = 1; }
             else if ((c & 0xF0) == 0xE0) { cp = c & 0x0FUL; extra = 2; }
             else if ((c & 0xF8) == 0xF0) { cp = c & 0x07UL; extra = 3; }
-            else { out_byte(&o, '?'); p++; continue; }
+            else { charset_put_byte(&o, '?'); p++; continue; }
 
             p++;
             while (extra-- > 0) {
@@ -437,12 +377,11 @@ size_t json_str_copy(const json_token *tok, char *dst, size_t dstsz)
                 cp = (cp << 6) | (unsigned long)(*p & 0x3F);
                 p++;
             }
-            out_cp(&o, cp);
+            charset_put_cp(&o, cp);
         }
     }
 
-    dst[o.n] = '\0';
-    return o.n;
+    return charset_out_finish(&o);
 }
 
 /* Accumulate a digit, saturating instead of overflowing. */

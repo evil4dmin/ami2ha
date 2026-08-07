@@ -12,3 +12,4 @@ config.local.mk
 
 # Unrelated third-party checkout that lives in this directory.
 amiagent/
+dist/
