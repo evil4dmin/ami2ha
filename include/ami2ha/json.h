@@ -77,8 +77,20 @@ int json_key_is(const json_token *tok, const char *literal);
  */
 size_t json_str_copy(const json_token *tok, char *dst, size_t dstsz);
 
-/* Numeric accessors for NUMBER tokens. Return 1 on success. */
-int json_num(const json_token *tok, double *out);
+/*
+ * Numeric accessors for NUMBER tokens. Return 1 on success.
+ *
+ * These are deliberately integer-only. Pulling in strtod would drag the
+ * whole double-precision runtime into the binary and, on a 68000 without an
+ * FPU, make every numeric read a call into mathieeedoubbas.library. Home
+ * Assistant reports readings as short decimals ("21.4", "1013.25"), which
+ * fixed point represents exactly and compares faster.
+ *
+ * json_fixed scales by 10^scale: "21.45" at scale 2 gives 2145. The first
+ * dropped digit rounds half away from zero. Values beyond the range of long
+ * saturate rather than wrapping.
+ */
 int json_int(const json_token *tok, long *out);
+int json_fixed(const json_token *tok, long *out, int scale);
 
 #endif /* AMI2HA_JSON_H */

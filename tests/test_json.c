@@ -2,7 +2,8 @@
 #include "tinytest.h"
 #include "ami2ha/json.h"
 
-#include <math.h>
+#include <limits.h>
+#include <stdio.h>
 
 /* Walk to the value of a top-level key. Returns the token type. */
 static json_type seek(json_parser *jp, const char *doc, const char *key,
@@ -27,7 +28,6 @@ static void test_flat_object(void)
     json_parser jp;
     json_token  tok;
     char        s[64];
-    double      d;
     long        n;
 
     CHECK_INT(seek(&jp, doc, "id", &tok), JSON_NUMBER);
@@ -42,8 +42,8 @@ static void test_flat_object(void)
     CHECK_INT(seek(&jp, doc, "nothing", &tok), JSON_NULL);
 
     CHECK_INT(seek(&jp, doc, "neg", &tok), JSON_NUMBER);
-    CHECK(json_num(&tok, &d));
-    CHECK(fabs(d + 3.5) < 1e-9);
+    CHECK(json_fixed(&tok, &n, 1));
+    CHECK_INT(n, -35);
 }
 
 static void test_nesting_and_skip(void)
@@ -316,6 +316,87 @@ static void test_ha_state_payload(void)
     CHECK(jp.err == NULL);
 }
 
+static void test_fixed_point(void)
+{
+    /* Numbers are parsed without floating point: a 68000 has no FPU, and
+     * strtod would drag in mathieeedoubbas.library at runtime. */
+    static const struct { const char *num; int scale; long want; } cases[] = {
+        { "0",         0, 0      },
+        { "42",        0, 42     },
+        { "-42",       0, -42    },
+        { "21.4",      1, 214    },
+        { "21.4",      2, 2140   },
+        { "21.45",     2, 2145   },
+        { "1013.25",   2, 101325 },
+        { "-3.5",      1, -35    },
+        { "0.001",     3, 1      },
+        /* the first dropped digit rounds half away from zero */
+        { "21.45",     1, 215    },
+        { "21.44",     1, 214    },
+        { "-21.45",    1, -215   },
+        { "2.5",       0, 3      },
+        { "2.4",       0, 2      },
+        /* exponents */
+        { "1e3",       0, 1000   },
+        { "1.5e2",     0, 150    },
+        { "15e-1",     0, 2      },
+        { "1e2",       2, 10000  }
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        char        doc[64];
+        json_parser jp;
+        json_token  tok;
+        long        got = 0;
+
+        sprintf(doc, "{\"v\":%s}", cases[i].num);
+        CHECK_INT(seek(&jp, doc, "v", &tok), JSON_NUMBER);
+        CHECK(json_fixed(&tok, &got, cases[i].scale));
+        if (got != cases[i].want)
+            printf("    (input %s scale %d -> %ld, want %ld)\n",
+                   cases[i].num, cases[i].scale, got, cases[i].want);
+        CHECK_INT(got, cases[i].want);
+    }
+}
+
+static void test_fixed_point_saturates(void)
+{
+    /* long is 32-bit on 68k. An absurd value must clamp, not wrap round to
+     * a small or negative number and quietly corrupt a gauge. */
+    json_parser jp;
+    json_token  tok;
+    long        got = 0;
+
+    /* 30 digits overflows long whether it is 32 or 64 bits wide, so this
+     * asserts the same thing on the Amiga and on the test host. */
+    CHECK_INT(seek(&jp, "{\"v\":999999999999999999999999999999}", "v", &tok),
+              JSON_NUMBER);
+    CHECK(json_fixed(&tok, &got, 0));
+    CHECK_INT(got, LONG_MAX);
+
+    CHECK_INT(seek(&jp, "{\"v\":-999999999999999999999999999999}", "v", &tok),
+              JSON_NUMBER);
+    CHECK(json_fixed(&tok, &got, 0));
+    CHECK(got < 0);
+
+    /* Scaling must not overflow either. */
+    CHECK_INT(seek(&jp, "{\"v\":2000000}", "v", &tok), JSON_NUMBER);
+    CHECK(json_fixed(&tok, &got, 6));
+    CHECK(got > 0);
+}
+
+static void test_fixed_point_rejects_non_numbers(void)
+{
+    json_parser jp;
+    json_token  tok;
+    long        got = 12345;
+
+    CHECK_INT(seek(&jp, "{\"v\":\"hello\"}", "v", &tok), JSON_STRING);
+    CHECK_INT(json_fixed(&tok, &got, 0), 0);
+    CHECK_INT(got, 12345); /* left untouched on failure */
+}
+
 void suite_json(void)
 {
     RUN(test_flat_object);
@@ -329,4 +410,7 @@ void suite_json(void)
     RUN(test_truncation_is_safe);
     RUN(test_errors);
     RUN(test_ha_state_payload);
+    RUN(test_fixed_point);
+    RUN(test_fixed_point_saturates);
+    RUN(test_fixed_point_rejects_non_numbers);
 }

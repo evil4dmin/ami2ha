@@ -17,11 +17,12 @@ it is meant to work from a clean install.
 
 ```
 src/core/     pure C99, no Amiga headers, no OS calls -- must have tests
-src/net/      bsdsocket.library, HTTP, TLS
-src/ha/       Home Assistant protocol and entity store
+              (this is most of the project: protocol, parsing, entity store)
+src/net/      bsdsocket.library transport, TLS
 src/ui/       MUI interface
 src/rexx/     ARexx host port
 src/config/   preferences
+src/main.c    command line front end
 ```
 
 Before writing something, ask whether it genuinely needs the operating

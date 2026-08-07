@@ -95,7 +95,15 @@ typedef signed long   SIPTR;
 
 #define A2H_ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
-/* Silence "unused parameter" without depending on compiler attributes. */
-#define A2H_UNUSED(x) ((void)(x))
+/*
+ * Silence "unused parameter" without depending on compiler attributes.
+ * vbcc reports the usual `((void)(x))` cast as a statement with no effect,
+ * so there it expands to nothing instead.
+ */
+#if defined(__VBCC__)
+#  define A2H_UNUSED(x)
+#else
+#  define A2H_UNUSED(x) ((void)(x))
+#endif
 
 #endif /* AMI2HA_COMPAT_H */

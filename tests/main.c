@@ -14,6 +14,9 @@ void suite_json(void);
 void suite_base64(void);
 void suite_sha1(void);
 void suite_ws(void);
+void suite_entity(void);
+void suite_http(void);
+void suite_ha(void);
 
 int main(void)
 {
@@ -24,6 +27,9 @@ int main(void)
     printf("base64\n"); suite_base64();
     printf("sha1\n");   suite_sha1();
     printf("ws\n");     suite_ws();
+    printf("entity\n"); suite_entity();
+    printf("http\n");   suite_http();
+    printf("ha\n");     suite_ha();
 
     printf("\n%d checks, %d failures\n", tt_checks, tt_failures);
     return tt_failures ? 1 : 0;

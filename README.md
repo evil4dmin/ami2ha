@@ -6,11 +6,10 @@ Control your smart home from a real Amiga: read sensors, watch entity states,
 flip switches and dimmers — from a fully configurable MUI dashboard, with an
 ARexx port so the rest of your Workbench can join in.
 
-> **Status: early development.** The toolchain, build system and the entire
-> portable protocol core (JSON, WebSocket framing, Base64, SHA-1) are
-> implemented and covered by tests. The network, UI and ARexx layers are not
-> written yet — see [Roadmap](#roadmap). There is no usable application
-> binary at this point.
+> **Status: early development.** The full stack from TCP up to live entity
+> updates works, and there is a runnable command line client. The MUI
+> dashboard and the ARexx port are not written yet — see
+> [Roadmap](#roadmap).
 
 ## Target systems
 
@@ -29,14 +28,15 @@ The project is split along one hard line:
 
 ```
 src/core/     pure C99, no Amiga headers, no OS calls
-              -> JSON, WebSocket framing, Base64, SHA-1, buffers
+              -> buffers, JSON reader, Base64, SHA-1, WebSocket framing
+              -> HTTP handshake, Home Assistant client, entity store
               -> compiled into BOTH the Amiga binary and the host test runner
 
-src/net/      bsdsocket.library, HTTP, optional AmiSSL
-src/ha/       Home Assistant protocol: auth, subscriptions, entity store
-src/ui/       MUI interface and the dashboard editor
-src/rexx/     ARexx host port
-src/config/   preferences load/save
+src/net/      bsdsocket.library transport, optional AmiSSL
+src/ui/       MUI interface and the dashboard editor        (not written yet)
+src/rexx/     ARexx host port                               (not written yet)
+src/config/   preferences load/save                         (not written yet)
+src/main.c    command line front end
 ```
 
 Everything that can be tested without an Amiga *is* tested without an Amiga.
@@ -44,7 +44,7 @@ Everything that can be tested without an Amiga *is* tested without an Amiga.
 about a second, so protocol bugs get caught long before an emulator boots.
 The same sources are then cross-compiled for m68k unchanged.
 
-Two decisions worth knowing about:
+A few decisions worth knowing about:
 
 - **The JSON reader builds no document tree.** A `get_states` reply on a large
   installation is a few hundred kilobytes, and a node-per-value DOM would not
@@ -55,6 +55,13 @@ Two decisions worth knowing about:
   UTF-8; Amiga fonts do not. Codepoints outside Latin-1 are folded to
   sensible ASCII (curly quotes, dashes, `EUR`) rather than rendered as
   mojibake.
+- **There is no floating point anywhere.** Numbers are parsed to fixed-point
+  integers. A 68000 has no FPU, so `strtod` would mean pulling
+  `mathieeedoubbas.library` into every numeric read; the binary depends on
+  nothing but `bsdsocket.library` and `dos.library`.
+- **The protocol client owns no socket.** It consumes and produces byte
+  buffers, so the whole session — upgrade, handshake, auth, subscription,
+  state application — is driven by tests with no network involved.
 
 ## Building
 
@@ -75,6 +82,23 @@ make test     # build and run the portable core tests on this machine
 
 See [docs/BUILDING.md](docs/BUILDING.md) for toolchain details, CPU and
 optimisation options, and how to enable AmiSSL.
+
+## The command line client
+
+The first runnable milestone is a CLI that exercises the whole stack. It is
+useful on its own, and scriptable:
+
+```
+ami2ha homeassistant.local TOKENFILE=S:ha.token LIST
+ami2ha homeassistant.local TOKENFILE=S:ha.token DOMAIN=light LIST
+ami2ha homeassistant.local TOKENFILE=S:ha.token GET=sensor.kitchen_temperature
+ami2ha homeassistant.local TOKENFILE=S:ha.token TOGGLE=light.kitchen
+ami2ha homeassistant.local TOKENFILE=S:ha.token WATCH
+```
+
+`WATCH` follows live state changes until Ctrl-C. Prefer `TOKENFILE` over
+`TOKEN`: a token on the command line ends up in your shell history and is
+visible in the task list.
 
 ## Connecting
 
@@ -101,10 +125,11 @@ entity changes. The command set is designed in
 - [x] Cross-toolchain setup, reproducible from one script
 - [x] Build system, host test harness
 - [x] Portable core: buffers, JSON reader, Base64, SHA-1, WebSocket framing
-- [ ] `bsdsocket.library` transport, non-blocking, with an Amiga-friendly event loop
-- [ ] HTTP/1.1 client and WebSocket handshake
-- [ ] Home Assistant client: authentication, `subscribe_events`, `get_states`, `call_service`
-- [ ] Entity store
+- [x] `bsdsocket.library` transport, non-blocking, driven by `WaitSelect`
+- [x] HTTP/1.1 upgrade and WebSocket handshake verification
+- [x] Home Assistant client: authentication, `subscribe_events`, `get_states`, `call_service`
+- [x] Entity store
+- [x] Command line client (`LIST`, `GET`, `WATCH`, `TOGGLE`, `ON`, `OFF`)
 - [ ] MUI dashboard with user-configurable widgets
 - [ ] Dashboard editor and preferences
 - [ ] ARexx host port

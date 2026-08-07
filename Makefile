@@ -50,7 +50,9 @@ CFLAGS      := +$(VC_CONFIG) -c99 -O=$(OPT) -cpu=$(CPU) \
 NDK_NOISE   := grep -v -e 'warning 53 in' -e 'warning 226 in' \
                        -e 'included from file' -e '^>' || true
 
-LDFLAGS     := -lamiga -lm
+# vbcc has no separate math library: the float helpers live in vc.lib and
+# are selected by the target config's -amiga-softfloat.
+LDFLAGS     := -lamiga
 
 ifeq ($(USE_AMISSL),1)
 CFLAGS      += -DA2H_USE_AMISSL=1 -I$(AMISSL_SDK)/include

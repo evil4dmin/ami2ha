@@ -3,7 +3,7 @@
  */
 #include "ami2ha/json.h"
 
-#include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 
 /* Bits held per open container on the parser stack. */
@@ -118,12 +118,16 @@ static json_type parse_value(json_parser *jp, json_token *tok)
 {
     switch (*jp->p) {
     case '{':
+        /* start points at the brace, so a caller can note the position and
+         * re-parse this subtree later without having buffered it. */
+        tok->start = jp->p;
         jp->p++;
         if (!push(jp, JS_OBJECT))
             return fail(jp, tok, "nesting too deep");
         tok->type = JSON_OBJECT_BEGIN;
         return JSON_OBJECT_BEGIN;
     case '[':
+        tok->start = jp->p;
         jp->p++;
         if (!push(jp, 0))
             return fail(jp, tok, "nesting too deep");
@@ -441,30 +445,111 @@ size_t json_str_copy(const json_token *tok, char *dst, size_t dstsz)
     return o.n;
 }
 
-int json_num(const json_token *tok, double *out)
+/* Accumulate a digit, saturating instead of overflowing. */
+static int push_digit(long *v, int d, int *saturated)
 {
-    char   tmp[48];
-    size_t n;
-    char  *endp;
-
-    if (tok->type != JSON_NUMBER)
+    if (*saturated)
         return 0;
-    n = tok->len;
-    if (n >= sizeof tmp)
-        n = sizeof tmp - 1;
-    memcpy(tmp, tok->start, n);
-    tmp[n] = '\0';
+    if (*v > (LONG_MAX - d) / 10) {
+        *saturated = 1;
+        *v = LONG_MAX;
+        return 0;
+    }
+    *v = *v * 10 + d;
+    return 1;
+}
 
-    *out = strtod(tmp, &endp);
-    return endp != tmp;
+int json_fixed(const json_token *tok, long *out, int scale)
+{
+    const char *p, *end;
+    long        val         = 0;
+    long        frac_digits = 0;
+    long        exp         = 0;
+    long        shift;
+    int         neg       = 0;
+    int         seen      = 0;
+    int         saturated = 0;
+    int         eneg      = 0;
+
+    if (tok->type != JSON_NUMBER || scale < 0)
+        return 0;
+
+    p   = tok->start;
+    end = tok->start + tok->len;
+
+    if (p < end && (*p == '+' || *p == '-')) {
+        neg = (*p == '-');
+        p++;
+    }
+
+    /*
+     * Accumulate every significant digit first and remember how many of
+     * them were fractional. Scaling, exponent and rounding are then a
+     * single adjustment at the end -- rounding early would corrupt any
+     * value carrying an exponent (1.5e2 must be 150, not 200).
+     */
+    while (p < end && *p >= '0' && *p <= '9') {
+        seen = 1;
+        push_digit(&val, *p - '0', &saturated);
+        p++;
+    }
+
+    if (p < end && *p == '.') {
+        p++;
+        while (p < end && *p >= '0' && *p <= '9') {
+            seen = 1;
+            push_digit(&val, *p - '0', &saturated);
+            frac_digits++;
+            p++;
+        }
+    }
+
+    if (!seen)
+        return 0;
+
+    if (p < end && (*p == 'e' || *p == 'E')) {
+        p++;
+        if (p < end && (*p == '+' || *p == '-')) {
+            eneg = (*p == '-');
+            p++;
+        }
+        while (p < end && *p >= '0' && *p <= '9') {
+            if (exp < 1000) /* clamp: anything larger saturates regardless */
+                exp = exp * 10 + (*p - '0');
+            p++;
+        }
+        if (eneg)
+            exp = -exp;
+    }
+
+    if (!saturated) {
+        shift = (long)scale - frac_digits + exp;
+
+        while (shift > 0) {
+            if (val > LONG_MAX / 10) {
+                saturated = 1;
+                break;
+            }
+            val *= 10;
+            shift--;
+        }
+        while (shift < 0) {
+            /* Round half away from zero on the last division only. */
+            val = (shift == -1) ? (val + 5) / 10 : val / 10;
+            shift++;
+            if (val == 0)
+                break;
+        }
+    }
+
+    if (saturated)
+        val = LONG_MAX;
+
+    *out = neg ? -val : val;
+    return 1;
 }
 
 int json_int(const json_token *tok, long *out)
 {
-    double d;
-
-    if (!json_num(tok, &d))
-        return 0;
-    *out = (long)d;
-    return 1;
+    return json_fixed(tok, out, 0);
 }
