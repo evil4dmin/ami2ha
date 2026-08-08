@@ -218,6 +218,16 @@ static int pump(struct app *a, long timeout_ms)
 
 /* ------------------------------------------------------------------ */
 
+/* The config owns a heap array now, so it needs more than free(). */
+static void free_dash(a2h_config **p)
+{
+    if (*p) {
+        cfg_free(*p);
+        free(*p);
+        *p = NULL;
+    }
+}
+
 static void usage(void)
 {
     printf(
@@ -293,7 +303,7 @@ int main(void)
         char cfgerr[CFG_ERR_MAX];
         if (!cfg_load_file(dash, (const char *)args.config, cfgerr, sizeof cfgerr)) {
             printf("ami2ha: %s\n", cfgerr);
-            free(dash);
+            free_dash(&dash);
             FreeArgs(rda);
             FreeDosObject(DOS_RDARGS, rdargs);
             return RETURN_ERROR;
@@ -309,7 +319,7 @@ int main(void)
         strncpy(cfg.host, dash->host, sizeof cfg.host - 1);
     else {
         printf("ami2ha: need a HOST, either as an argument or in a CONFIG file\n");
-        free(dash);
+        free_dash(&dash);
         FreeArgs(rda);
         FreeDosObject(DOS_RDARGS, rdargs);
         return RETURN_ERROR;
@@ -327,7 +337,7 @@ int main(void)
         if (tf) {
             if (!cfg_read_token_file(tf, token, sizeof token)) {
                 printf("ami2ha: cannot read token from %s\n", tf);
-                free(dash);
+                free_dash(&dash);
                 FreeArgs(rda);
                 FreeDosObject(DOS_RDARGS, rdargs);
                 return RETURN_ERROR;
@@ -338,7 +348,7 @@ int main(void)
             printf("ami2ha: need TOKEN or TOKENFILE\n"
                    "  Create a long-lived access token in Home Assistant under\n"
                    "  your profile, then keep it in a file: TOKENFILE=S:ha.token\n");
-            free(dash);
+            free_dash(&dash);
             FreeArgs(rda);
             FreeDosObject(DOS_RDARGS, rdargs);
             return RETURN_ERROR;
@@ -359,7 +369,7 @@ int main(void)
     rc = net_lib_open();
     if (rc != NET_OK) {
         printf("ami2ha: %s\n", net_error_text(rc));
-        free(dash);
+        free_dash(&dash);
         FreeArgs(rda);
         FreeDosObject(DOS_RDARGS, rdargs);
         return RETURN_FAIL;
@@ -367,7 +377,7 @@ int main(void)
 
     if (!ha_client_init(&app.ha, &cfg, &cb, make_seed())) {
         printf("ami2ha: out of memory\n");
-        free(dash);
+        free_dash(&dash);
         net_lib_close();
         FreeArgs(rda);
         FreeDosObject(DOS_RDARGS, rdargs);
@@ -497,7 +507,7 @@ int main(void)
     }
 
 cleanup:
-    free(dash);
+    free_dash(&dash);
     net_disconnect(&app.sock);
     ha_client_free(&app.ha);
     net_lib_close();

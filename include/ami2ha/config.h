@@ -46,7 +46,10 @@
 
 /* Bounds exist to keep a mistyped or hostile file from exhausting memory. */
 #define CFG_MAX_GROUPS   32
-#define CFG_MAX_WIDGETS  256
+#define CFG_MAX_WIDGETS  128
+
+/* Widgets are allocated in blocks of this many as the file is read. */
+#define CFG_WIDGET_CHUNK 16
 
 typedef enum {
     W_SENSOR = 0, /* read-only value with optional unit    */
@@ -81,14 +84,26 @@ typedef struct {
     int  columns;      /* dashboard columns; 0 = let MUI decide */
     int  refresh_secs; /* application-level ping interval       */
 
-    a2h_group  groups[CFG_MAX_GROUPS];
-    int        ngroups;
-    a2h_widget widgets[CFG_MAX_WIDGETS];
-    int        nwidgets;
+    a2h_group   groups[CFG_MAX_GROUPS];
+    int         ngroups;
+
+    /*
+     * Grown on demand rather than embedded. Embedding CFG_MAX_WIDGETS
+     * widgets made a2h_config roughly 80 KB, which is both absurd on a 2 MB
+     * machine for a dashboard holding a dozen controls, and large enough to
+     * land in territory where the allocation misbehaved on real hardware.
+     * A typical dashboard now costs a few KB.
+     */
+    a2h_widget *widgets;
+    int         nwidgets;
+    int         widget_cap;
 } a2h_config;
 
 /* Populate with defaults (port 8123, one column, no widgets). */
 void cfg_init(a2h_config *cfg);
+
+/* Release the widget array. Safe on a zeroed or already-freed config. */
+void cfg_free(a2h_config *cfg);
 
 /*
  * Parse `text`. Returns 1 on success. On failure returns 0 and writes a

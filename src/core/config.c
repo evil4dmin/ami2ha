@@ -4,6 +4,7 @@
 #include "ami2ha/charset.h"
 
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 void cfg_init(a2h_config *cfg)
@@ -12,6 +13,39 @@ void cfg_init(a2h_config *cfg)
     cfg->port         = 8123;
     cfg->columns      = 1;
     cfg->refresh_secs = 60;
+}
+
+void cfg_free(a2h_config *cfg)
+{
+    free(cfg->widgets);
+    cfg->widgets    = NULL;
+    cfg->nwidgets   = 0;
+    cfg->widget_cap = 0;
+}
+
+/* Make room for one more widget. Returns 0 if the cap or memory is reached. */
+static int ensure_widget_room(a2h_config *cfg)
+{
+    a2h_widget *grown;
+    int         want;
+
+    if (cfg->nwidgets < cfg->widget_cap)
+        return 1;
+    if (cfg->nwidgets >= CFG_MAX_WIDGETS)
+        return 0;
+
+    want = cfg->widget_cap + CFG_WIDGET_CHUNK;
+    if (want > CFG_MAX_WIDGETS)
+        want = CFG_MAX_WIDGETS;
+
+    grown = (a2h_widget *)realloc(cfg->widgets,
+                                  (size_t)want * sizeof *grown);
+    if (!grown)
+        return 0;
+
+    cfg->widgets    = grown;
+    cfg->widget_cap = want;
+    return 1;
 }
 
 const char *cfg_widget_kind_name(widget_kind k)
@@ -250,12 +284,13 @@ static void parse_widget(cfg_scan *s, a2h_config *cfg, widget_kind kind)
     char        tok[CFG_DATA_MAX];
     int         have_label = 0;
 
-    if (cfg->nwidgets >= CFG_MAX_WIDGETS) {
-        cfg_fail(s, "too many widgets", NULL);
-        return;
-    }
     if (cfg->ngroups == 0) {
         cfg_fail(s, "widget outside any group", NULL);
+        return;
+    }
+
+    if (!ensure_widget_room(cfg)) {
+        cfg_fail(s, "too many widgets", NULL);
         return;
     }
 

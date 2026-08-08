@@ -123,6 +123,7 @@ static void test_config_labels_are_transcoded(void)
 
     /* Entity ids must NOT be touched. */
     CHECK_STR(cfg.widgets[0].entity, "light.kueche");
+    cfg_free(&cfg);
 }
 
 void suite_charset(void)

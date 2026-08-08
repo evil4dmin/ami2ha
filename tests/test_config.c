@@ -31,6 +31,7 @@ static void test_globals(void)
     CHECK_INT(cfg.columns, 2);
     CHECK_INT(cfg.refresh_secs, 30);
     CHECK_INT(cfg.ngroups, 0);
+    cfg_free(&cfg);
 }
 
 static void test_defaults(void)
@@ -41,6 +42,7 @@ static void test_defaults(void)
     CHECK(parse(&cfg, "host ha.local\n", err, sizeof err));
     CHECK_INT(cfg.port, 8123);
     CHECK_INT(cfg.columns, 1);
+    cfg_free(&cfg);
 }
 
 static void test_groups_and_widgets(void)
@@ -85,6 +87,7 @@ static void test_groups_and_widgets(void)
     CHECK_INT(cfg.widgets[3].kind, W_BUTTON);
     CHECK_STR(cfg.widgets[3].service, "scene.gute_nacht");
     CHECK_INT(cfg.widgets[3].group, 1);
+    cfg_free(&cfg);
 }
 
 static void test_label_defaults_from_entity(void)
@@ -102,6 +105,7 @@ static void test_label_defaults_from_entity(void)
 
     CHECK_STR(cfg.widgets[0].label, "Kitchen power usage");
     CHECK_STR(cfg.widgets[1].label, "Good night");
+    cfg_free(&cfg);
 }
 
 static void test_button_with_json_data(void)
@@ -122,6 +126,7 @@ static void test_button_with_json_data(void)
     CHECK_STR(cfg.widgets[0].entity, "light.kueche");
     CHECK_STR(cfg.widgets[0].data, "{\"brightness\":255}");
     CHECK_STR(cfg.widgets[0].label, "Hell");
+    cfg_free(&cfg);
 }
 
 static void test_line_continuation(void)
@@ -140,6 +145,7 @@ static void test_line_continuation(void)
     CHECK_STR(cfg.widgets[0].label, "Power");
     CHECK_INT(cfg.widgets[0].min, 0);
     CHECK_INT(cfg.widgets[0].max, 3000);
+    cfg_free(&cfg);
 }
 
 static void test_comments_and_blank_lines(void)
@@ -160,6 +166,7 @@ static void test_comments_and_blank_lines(void)
     CHECK_INT(cfg.nwidgets, 1);
     CHECK_STR(cfg.groups[0].title, "G");
     CHECK_STR(cfg.widgets[0].entity, "sensor.a");
+    cfg_free(&cfg);
 }
 
 static void test_text_widget(void)
@@ -175,6 +182,7 @@ static void test_text_widget(void)
     CHECK_INT(cfg.widgets[0].kind, W_TEXT);
     CHECK_STR(cfg.widgets[0].label, "Just a caption");
     CHECK_STR(cfg.widgets[0].entity, "");
+    cfg_free(&cfg);
 }
 
 /* ---- error reporting ---- */
@@ -192,6 +200,7 @@ static void check_error(const char *text, const char *expect_substr)
     /* Every message must name the line, or it is useless for a hand-edited
      * file. */
     CHECK(strstr(err, "line ") == err);
+    cfg_free(&cfg);
 }
 
 static void test_errors(void)
@@ -225,6 +234,7 @@ static void test_error_line_numbers(void)
         "    wibble\n"         /* 5 */
         "end\n", err, sizeof err), 0);
     CHECK_STR(err, "line 5: unknown keyword 'wibble'");
+    cfg_free(&cfg);
 }
 
 static void test_bounds(void)
@@ -253,6 +263,7 @@ static void test_bounds(void)
     CHECK(strstr(err, "too many groups") != NULL);
     CHECK(cfg.ngroups <= CFG_MAX_GROUPS);
     buf_free(&big);
+    cfg_free(&cfg);
 }
 
 static void test_long_values_truncate(void)
@@ -271,6 +282,7 @@ static void test_long_values_truncate(void)
     CHECK(cfg_parse(&cfg, (const char *)b.data, b.len, err, sizeof err));
     CHECK_INT(strlen(cfg.widgets[0].label), CFG_LABEL_MAX - 1);
     buf_free(&b);
+    cfg_free(&cfg);
 }
 
 static void test_generate_roundtrip(void)
