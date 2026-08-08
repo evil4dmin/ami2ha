@@ -272,9 +272,34 @@ int main(void)
     memset(&args, 0, sizeof args);
 
     /*
-     * RDAF_NOPROMPT matters: with an empty command line ReadArgs otherwise
-     * falls back to reading arguments from stdin, so simply typing
-     * "ami2ha" would hang the shell with no indication why.
+     * Never hand ReadArgs an empty command line.
+     *
+     * With nothing to parse it falls back to reading arguments from the
+     * input stream. From an interactive Shell that merely waits for a line;
+     * launched by something whose input is a pipe that never closes, it
+     * blocks forever, and Ctrl-C cannot interrupt that read. RDAF_NOPROMPT
+     * alone does not prevent it -- that flag only suppresses the prompt.
+     * So check the raw argument string first and print usage instead.
+     */
+    {
+        const char *as = (const char *)GetArgStr();
+        int         have_args = 0;
+
+        if (as) {
+            while (*as) {
+                if (*as > ' ') { have_args = 1; break; }
+                as++;
+            }
+        }
+        if (!have_args) {
+            usage();
+            return RETURN_WARN;
+        }
+    }
+
+    /*
+     * RDAF_NOPROMPT is kept as a second line of defence: it stops ReadArgs
+     * sourcing arguments from stdin even if a command line slips through.
      */
     rdargs = (struct RDArgs *)AllocDosObject(DOS_RDARGS, NULL);
     if (!rdargs) {
