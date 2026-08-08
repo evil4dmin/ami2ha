@@ -27,15 +27,31 @@ struct a2h_timeval {
     ULONG micro;
 };
 
+long net_socket_api_version = 0;
+
 int net_lib_open(void)
 {
+    /* Ask for the newest API we know about, then fall back.
+     *
+     * Demanding version 4 outright is wrong: UAE's bsdsocket emulation and
+     * some real stacks report a lower version, and OpenLibrary refuses
+     * anything below what is asked for -- so the library appears to be
+     * missing entirely on a machine that has perfectly good networking.
+     * Nothing here needs a v4-only call, so any version will do. */
+    static const long versions[] = { 4, 3, 2, 1, 0 };
+    size_t i;
+
     if (SocketBase)
         return NET_OK;
 
-    /* Version 4 is the AmiTCP API level every modern stack provides
-     * (Roadshow, AmiTCP 4.x, Miami, MiamiDx). */
-    SocketBase = OpenLibrary("bsdsocket.library", 4);
-    return SocketBase ? NET_OK : NET_ERR_LIB;
+    for (i = 0; i < sizeof versions / sizeof versions[0]; i++) {
+        SocketBase = OpenLibrary("bsdsocket.library", (unsigned long)versions[i]);
+        if (SocketBase) {
+            net_socket_api_version = SocketBase->lib_Version;
+            return NET_OK;
+        }
+    }
+    return NET_ERR_LIB;
 }
 
 void net_lib_close(void)

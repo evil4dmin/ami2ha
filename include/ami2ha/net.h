@@ -34,6 +34,9 @@ typedef struct {
 
 /* bsdsocket.library must be opened once per process, before any socket use. */
 int  net_lib_open(void);
+
+/* Version of bsdsocket.library actually opened; 0 before net_lib_open. */
+extern long net_socket_api_version;
 void net_lib_close(void);
 
 const char *net_error_text(int code);
