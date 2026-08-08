@@ -544,7 +544,7 @@ static int flush_output(a2h_ui *ui)
 
 static int service_socket(a2h_ui *ui, int readable, int writable)
 {
-    unsigned char buf[2048];
+    static unsigned char buf[2048]; /* keep it off the stack, as in main.c */
 
     if (ui->sock->connecting) {
         if (writable) {

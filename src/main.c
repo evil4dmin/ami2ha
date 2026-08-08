@@ -24,6 +24,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * vbcc's startup code grows the stack to this before calling main().
+ *
+ * An AmigaDOS shell hands a program about 4 KB, and a daemon launching us
+ * may give less. main()'s frame plus a 2 KB read buffer plus whatever
+ * printf needs is enough to run off the end -- and a 68k frame is reserved
+ * in one instruction on entry, so the overflow happens before any output
+ * appears, taking unrelated tasks with it. There is no guard page to catch
+ * it, so the only defence is asking for enough up front.
+ */
+size_t __stack = 32768;
+
 #define TEMPLATE                                                        \
     "HOST,PORT/N,TOKEN/K,TOKENFILE/K,CONFIG/K,WRITECONFIG/K,"          \
     "GUI/S,LIST/S,WATCH/S,GET/K,TOGGLE/K,ON/K,OFF/K,DOMAIN/K,TIMEOUT/N/K"
@@ -150,7 +162,9 @@ static int flush_output(struct app *a)
 
 static int pump(struct app *a, long timeout_ms)
 {
-    unsigned char buf[2048];
+    /* Static rather than automatic: 2 KB is a large slice of an Amiga
+     * stack, and the program is single-threaded. */
+    static unsigned char buf[2048];
     unsigned long sigs;
     int           readable = 0, writable = 0;
     int           want_write;
