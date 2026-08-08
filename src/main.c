@@ -204,6 +204,17 @@ static int pump(struct app *a, long timeout_ms)
 
 /* ------------------------------------------------------------------ */
 
+static void usage(void)
+{
+    printf(
+      "ami2ha -- Home Assistant client\n\n"
+      "  ami2ha <host> [PORT=n] TOKENFILE=<file> LIST\n"
+      "  ami2ha <host> TOKENFILE=<file> WRITECONFIG=<file>\n"
+      "  ami2ha CONFIG=<file> GUI\n\n"
+      "Template:\n  " TEMPLATE "\n\n"
+      "Keep the access token in a file rather than on the command line.\n");
+}
+
 static unsigned long make_seed(void)
 {
     struct DateStamp ds;
@@ -220,6 +231,7 @@ int main(void)
 {
     struct cli_args args;
     struct RDArgs  *rda;
+    struct RDArgs  *rdargs = NULL;
     struct app      app;
     ha_config       cfg;
     ha_callbacks    cb;
@@ -234,9 +246,23 @@ int main(void)
     int             rc;
 
     memset(&args, 0, sizeof args);
-    rda = ReadArgs((STRPTR)TEMPLATE, (LONG *)&args, NULL);
+
+    /*
+     * RDAF_NOPROMPT matters: with an empty command line ReadArgs otherwise
+     * falls back to reading arguments from stdin, so simply typing
+     * "ami2ha" would hang the shell with no indication why.
+     */
+    rdargs = (struct RDArgs *)AllocDosObject(DOS_RDARGS, NULL);
+    if (!rdargs) {
+        printf("ami2ha: out of memory\n");
+        return RETURN_FAIL;
+    }
+    rdargs->RDA_Flags |= RDAF_NOPROMPT;
+
+    rda = ReadArgs((STRPTR)TEMPLATE, (LONG *)&args, rdargs);
     if (!rda) {
-        PrintFault(IoErr(), (STRPTR)"ami2ha");
+        usage();
+        FreeDosObject(DOS_RDARGS, rdargs);
         return RETURN_ERROR;
     }
 
@@ -245,6 +271,7 @@ int main(void)
     if (!dash) {
         printf("ami2ha: out of memory\n");
         FreeArgs(rda);
+        FreeDosObject(DOS_RDARGS, rdargs);
         return RETURN_FAIL;
     }
     cfg_init(dash);
@@ -254,6 +281,7 @@ int main(void)
             printf("ami2ha: %s\n", cfgerr);
             free(dash);
             FreeArgs(rda);
+            FreeDosObject(DOS_RDARGS, rdargs);
             return RETURN_ERROR;
         }
     }
@@ -269,6 +297,7 @@ int main(void)
         printf("ami2ha: need a HOST, either as an argument or in a CONFIG file\n");
         free(dash);
         FreeArgs(rda);
+        FreeDosObject(DOS_RDARGS, rdargs);
         return RETURN_ERROR;
     }
 
@@ -286,6 +315,7 @@ int main(void)
                 printf("ami2ha: cannot read token from %s\n", tf);
                 free(dash);
                 FreeArgs(rda);
+                FreeDosObject(DOS_RDARGS, rdargs);
                 return RETURN_ERROR;
             }
         } else if (dash->token[0]) {
@@ -296,6 +326,7 @@ int main(void)
                    "  your profile, then keep it in a file: TOKENFILE=S:ha.token\n");
             free(dash);
             FreeArgs(rda);
+            FreeDosObject(DOS_RDARGS, rdargs);
             return RETURN_ERROR;
         }
     }
@@ -316,6 +347,7 @@ int main(void)
         printf("ami2ha: %s\n", net_error_text(rc));
         free(dash);
         FreeArgs(rda);
+        FreeDosObject(DOS_RDARGS, rdargs);
         return RETURN_FAIL;
     }
 
@@ -324,6 +356,7 @@ int main(void)
         free(dash);
         net_lib_close();
         FreeArgs(rda);
+        FreeDosObject(DOS_RDARGS, rdargs);
         return RETURN_FAIL;
     }
 
@@ -455,5 +488,6 @@ cleanup:
     ha_client_free(&app.ha);
     net_lib_close();
     FreeArgs(rda);
+    FreeDosObject(DOS_RDARGS, rdargs);
     return rc_exit;
 }
