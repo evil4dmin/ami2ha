@@ -132,6 +132,26 @@ ami2ha CONFIG=S:ami2ha.cfg GUI
 Widget kinds are `sensor`, `toggle`, `gauge`, `button` and `text`. See
 [examples/dashboard.cfg](examples/dashboard.cfg) for a worked example.
 
+### Or choose the entities in Home Assistant
+
+Rather than listing them, tag entities with a label in Home Assistant and
+point ami2ha at it:
+
+```
+host       homeassistant.local
+tokenfile  S:ha.token
+label      amiga
+```
+
+Everything carrying that label appears on the Amiga, named by its friendly
+name, with the widget kind inferred from its domain. Add a label in the HA
+UI and it turns up on the next start -- no file to edit on the Amiga.
+
+This asks Home Assistant to do the filtering with a rendered template. The
+obvious alternative, reading the entity registry, measured **2.4 MB** on a
+real installation -- more than the WebSocket message cap and far more than
+an Amiga can hold. The template answer was **164 bytes**.
+
 The window updates from the WebSocket push, so readings change by
 themselves without polling. While idle the application uses no CPU at all:
 MUI hands its signal mask to `WaitSelect`, so one `Wait()` covers the GUI,
@@ -181,7 +201,7 @@ back. See [docs/AREXX.md](docs/AREXX.md) for the full command set.
 - [x] Command line client (`LIST`, `GET`, `WATCH`, `TOGGLE`, `ON`, `OFF`)
 - [x] Dashboard configuration format, parser and generator
 - [x] MUI dashboard: sensors, gauges, toggles, buttons, live updates
-- [ ] Choose entities from within Home Assistant (see docs/IDEAS.md)
+- [x] Choose entities from within Home Assistant, by label
 - [ ] In-app dashboard editor
 - [ ] Reconnect handling and connection status UI
 - [x] ARexx host port

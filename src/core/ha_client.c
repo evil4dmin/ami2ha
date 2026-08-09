@@ -5,6 +5,7 @@
 #include "ami2ha/json.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static void notify_changed(ha_client *c, ha_entity *e);
@@ -69,6 +70,7 @@ int ha_client_init(ha_client *c, const ha_config *cfg,
 
     buf_init(&c->in);
     buf_init(&c->out);
+    buf_init(&c->label_blob);
     ws_stream_init(&c->ws);
     if (!ha_store_init(&c->store, 256))
         return 0;
@@ -82,10 +84,70 @@ int ha_client_init(ha_client *c, const ha_config *cfg,
 
 void ha_client_free(ha_client *c)
 {
+    free(c->label_ptrs);
+    c->label_ptrs = NULL;
+    buf_free(&c->label_blob);
     buf_free(&c->in);
     buf_free(&c->out);
     ws_stream_free(&c->ws);
     ha_store_free(&c->store);
+}
+
+void ha_client_set_label(ha_client *c, const char *label)
+{
+    strncpy(c->label, label ? label : "", sizeof c->label - 1);
+    c->label[sizeof c->label - 1] = '\0';
+}
+
+/*
+ * Turn "a.one,b.two" into a NUL-separated blob plus a pointer array, and
+ * point the entity filter at it.
+ */
+static int apply_label_list(ha_client *c, const char *csv)
+{
+    size_t i;
+    int    n = 0;
+    char  *p;
+
+    buf_reset(&c->label_blob);
+    if (!buf_append(&c->label_blob, csv, strlen(csv) + 1))
+        return 0;
+
+    p = (char *)c->label_blob.data;
+    for (i = 0; i < c->label_blob.len; i++)
+        if (p[i] == ',')
+            p[i] = '\0';
+
+    /* Count entries, skipping the empty string an empty result produces. */
+    for (i = 0; i < c->label_blob.len; ) {
+        size_t len = strlen(p + i);
+        if (len)
+            n++;
+        i += len + 1;
+    }
+
+    free(c->label_ptrs);
+    c->label_ptrs = NULL;
+    c->label_count = 0;
+    if (n == 0)
+        return 1;
+
+    c->label_ptrs = (char **)calloc((size_t)n, sizeof *c->label_ptrs);
+    if (!c->label_ptrs)
+        return 0;
+
+    n = 0;
+    for (i = 0; i < c->label_blob.len; ) {
+        size_t len = strlen(p + i);
+        if (len)
+            c->label_ptrs[n++] = p + i;
+        i += len + 1;
+    }
+    c->label_count = n;
+
+    c->filter       = (const char *const *)c->label_ptrs;
+    c->filter_count = n;
+    return 1;
 }
 
 void ha_client_set_filter(ha_client *c, const char *const *ids, int count)
@@ -335,6 +397,44 @@ static void notify_changed(ha_client *c, ha_entity *e)
  * Message dispatch
  * ------------------------------------------------------------------ */
 
+static void send_subscribe_entities(ha_client *c)
+{
+    a2h_buf m;
+    int     i;
+
+    buf_init(&m);
+    c->subscribe_id = c->next_id++;
+    buf_printf(&m, "{\"id\":%lu,\"type\":\"subscribe_entities\","
+                   "\"entity_ids\":[", c->subscribe_id);
+    for (i = 0; i < c->filter_count; i++) {
+        if (i)
+            buf_append_str(&m, ",");
+        buf_append_json_string(&m, c->filter[i]);
+    }
+    buf_append_str(&m, "]}");
+
+    if (!m.failed)
+        send_text(c, (const char *)m.data, m.len);
+    buf_free(&m);
+
+    c->state = HA_ST_LOADING;
+}
+
+/* The label query is a subscription; we only want its first answer. */
+static void stop_template(ha_client *c)
+{
+    char msg[96];
+    int  n;
+
+    if (!c->template_id)
+        return;
+    n = sprintf(msg, "{\"id\":%lu,\"type\":\"unsubscribe_events\","
+                     "\"subscription\":%lu}",
+                (unsigned long)c->next_id++, c->template_id);
+    send_text(c, msg, (size_t)n);
+    c->template_id = 0;
+}
+
 static void send_initial_requests(ha_client *c)
 {
     char msg[64];
@@ -349,26 +449,26 @@ static void send_initial_requests(ha_client *c)
      * entities and then streams deltas, turning that into a few KB -- the
      * difference between fitting on a classic Amiga and not.
      */
-    if (c->filter && c->filter_count > 0) {
+    if (c->label[0]) {
+        /* Ask which entities carry the label; subscribe once we know. */
         a2h_buf m;
-        int     i;
 
         buf_init(&m);
-        c->subscribe_id = c->next_id++;
-        buf_printf(&m, "{\"id\":%lu,\"type\":\"subscribe_entities\","
-                       "\"entity_ids\":[", c->subscribe_id);
-        for (i = 0; i < c->filter_count; i++) {
-            if (i)
-                buf_append_str(&m, ",");
-            buf_append_json_string(&m, c->filter[i]);
-        }
-        buf_append_str(&m, "]}");
-
+        c->template_id = c->next_id++;
+        buf_printf(&m, "{\"id\":%lu,\"type\":\"render_template\","
+                       "\"template\":\"{{ label_entities('", c->template_id);
+        buf_append_str(&m, c->label);
+        buf_append_str(&m, "') | join(',') }}\"}");
         if (!m.failed)
             send_text(c, (const char *)m.data, m.len);
         buf_free(&m);
 
         c->state = HA_ST_LOADING;
+        return;
+    }
+
+    if (c->filter && c->filter_count > 0) {
+        send_subscribe_entities(c);
         return;
     }
 
@@ -423,7 +523,7 @@ static void handle_result(ha_client *c, long id, json_parser *jp,
 }
 
 /* Handle an "event" payload: descend to event.data.new_state. */
-static void handle_event(ha_client *c, json_parser *jp, json_token *tok)
+static void handle_event(ha_client *c, long id, json_parser *jp, json_token *tok)
 {
     json_token t;
 
@@ -433,11 +533,41 @@ static void handle_event(ha_client *c, json_parser *jp, json_token *tok)
     }
 
     while (json_next(jp, &t) == JSON_KEY) {
+        int is_result = json_key_is(&t, "result");
         int is_data  = json_key_is(&t, "data");
         int is_added = json_key_is(&t, "a");
         int is_chg   = json_key_is(&t, "c");
         int is_rem   = json_key_is(&t, "r");
         json_type vt = json_next(jp, &t);
+
+        /*
+         * The label query answers with a rendered template: a comma
+         * separated list of entity ids, or "" when the label is unused.
+         */
+        if (is_result && vt == JSON_STRING &&
+            c->template_id && (unsigned long)id == c->template_id) {
+            char ids[1024];
+
+            json_str_copy(&t, ids, sizeof ids);
+            stop_template(c);
+
+            if (!apply_label_list(c, ids)) {
+                fail_client(c, "out of memory");
+                return;
+            }
+            if (c->cb.entities_discovered)
+                c->cb.entities_discovered(c, c->filter, c->filter_count,
+                                          c->cb.user);
+
+            if (c->filter_count == 0) {
+                char why[HA_ERROR_MAX];
+                sprintf(why, "no entities carry the label '%.30s'", c->label);
+                fail_client(c, why);
+                return;
+            }
+            send_subscribe_entities(c);
+            continue;
+        }
 
         /* subscribe_entities: "a" = full state, "c" = deltas, "r" = gone. */
         if ((is_added || is_chg) && vt == JSON_OBJECT_BEGIN) {
@@ -542,7 +672,7 @@ static void handle_message(ha_client *c, const char *msg, size_t len)
                 if (is_result)
                     handle_result(c, id, &jp, &tok);
                 else
-                    handle_event(c, &jp, &tok);
+                    handle_event(c, id, &jp, &tok);
             } else {
                 payload_at   = tok.start;
                 payload_kind = vt;
@@ -569,7 +699,7 @@ static void handle_message(ha_client *c, const char *msg, size_t len)
             if (strcmp(type, "result") == 0)
                 handle_result(c, id, &sub, &st);
             else if (strcmp(type, "event") == 0)
-                handle_event(c, &sub, &st);
+                handle_event(c, id, &sub, &st);
         }
     }
 

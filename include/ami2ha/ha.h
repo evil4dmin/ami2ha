@@ -44,6 +44,12 @@ typedef struct {
     void (*entity_changed)(ha_client *c, ha_entity *e, void *user);
     /* Terminal failure. The caller should close the socket. */
     void (*failed)(ha_client *c, const char *message, void *user);
+    /*
+     * Home Assistant answered which entities carry the configured label.
+     * The array is owned by the client and stays valid until it is freed.
+     */
+    void (*entities_discovered)(ha_client *c, const char *const *ids,
+                                int count, void *user);
     void *user;
 } ha_callbacks;
 
@@ -82,6 +88,13 @@ struct ha_client {
      */
     const char *const *filter;
     int                filter_count;
+
+    /* Label discovery: see ha_client_set_label. */
+    char          label[48];
+    unsigned long template_id;
+    a2h_buf       label_blob;   /* the id list, commas replaced by NULs */
+    char        **label_ptrs;   /* pointers into label_blob             */
+    int           label_count;
 };
 
 /*
@@ -100,6 +113,20 @@ void ha_client_free(ha_client *c);
  * LIST wants.
  */
 void ha_client_set_filter(ha_client *c, const char *const *ids, int count);
+
+/*
+ * Let Home Assistant decide which entities to show: on connect, ask which
+ * ones carry `label`, and subscribe to those.
+ *
+ * This is done with render_template rather than by reading the entity
+ * registry. The registry describes every entity in the installation and
+ * measured 2.4 MB on a real system -- more than the WebSocket message cap,
+ * let alone what an Amiga can hold. The template returns just the ids, and
+ * measured 164 bytes.
+ *
+ * Takes precedence over ha_client_set_filter.
+ */
+void ha_client_set_label(ha_client *c, const char *label);
 
 /* Reset to IDLE, keeping configuration, so a reconnect can reuse it. */
 void ha_client_reset(ha_client *c);

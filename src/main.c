@@ -64,12 +64,30 @@ struct app {
     a2h_socket  sock;
     a2h_ui     *ui;      /* NULL in command line mode */
     a2h_rexx   *rexx;    /* NULL unless the host port is open */
+    a2h_config *dash;    /* borrowed, for label-discovered widgets */
     int         ready;
     int         failed;
     int         watching;
 };
 
 /* ------------------------------------------------------------------ */
+
+static void cb_discovered(ha_client *c, const char *const *ids, int n,
+                          void *user)
+{
+    struct app *a = (struct app *)user;
+    int         i;
+
+    A2H_UNUSED(c);
+    if (!a->dash)
+        return;
+
+    for (i = 0; i < n; i++)
+        cfg_add_discovered(a->dash, ids[i], a->dash->label);
+
+    printf("ami2ha: label '%s' selected %d entit%s\n",
+           a->dash->label, n, n == 1 ? "y" : "ies");
+}
 
 static void cb_ready(ha_client *c, void *user)
 {
@@ -390,11 +408,13 @@ int main(int argc, char **argv)
 
     memset(&app, 0, sizeof app);
     app.watching = args.watch ? 1 : 0;
+    app.dash     = dash;
 
     memset(&cb, 0, sizeof cb);
     cb.ready          = cb_ready;
     cb.entity_changed = cb_changed;
     cb.failed         = cb_failed;
+    cb.entities_discovered = cb_discovered;
     cb.user           = &app;
 
     /* --- bring up the stack --- */
@@ -422,7 +442,15 @@ int main(int argc, char **argv)
      * hundreds of KB to store for no benefit. LIST and WRITECONFIG want
      * the full picture, so they opt out.
      */
-    if (dash->nwidgets > 0 && !args.list && !args.writeconfig) {
+    /*
+     * A label is an explicit statement of what the user wants to see, so it
+     * applies to LIST too -- listing the labelled set is both more useful
+     * and far cheaper than fetching the whole installation. WRITECONFIG is
+     * the exception: its job is to enumerate everything.
+     */
+    if (dash->label[0] && !args.writeconfig) {
+        ha_client_set_label(&app.ha, dash->label);
+    } else if (dash->nwidgets > 0 && !args.list && !args.writeconfig) {
         int i;
 
         for (i = 0; i < dash->nwidgets && nfilter < (int)A2H_ARRAY_LEN(filter_ids); i++)
@@ -444,6 +472,11 @@ int main(int argc, char **argv)
     if (rc == NET_OK)
         ha_client_begin(&app.ha);
 
+    if (args.timeout)
+        deadline_ms = *args.timeout * 1000L;
+    else
+        deadline_ms = (nfilter > 0 || dash->label[0]) ? 30000L : 120000L;
+
     /* The ARexx port only makes sense while we are running: a one-shot
      * command would publish a port and remove it again before any script
      * could address it. */
@@ -459,6 +492,40 @@ int main(int argc, char **argv)
     if (args.gui) {
         char uierr[128];
 
+        /* Connect and load first. With a label the widget list does not
+         * exist until Home Assistant has answered, and even without one
+         * this avoids opening an empty window that fills in later. */
+        while (!app.ready && !app.failed && deadline_ms > 0) {
+            if (!pump(&app, 250))
+                goto cleanup;
+            deadline_ms -= 250;
+        }
+        if (app.failed) { rc_exit = RETURN_FAIL; goto cleanup; }
+        if (!app.ready) {
+            printf("ami2ha: timed out waiting for Home Assistant\n");
+            rc_exit = RETURN_FAIL;
+            goto cleanup;
+        }
+
+        /*
+         * A discovered dashboard names its widgets after the entity id,
+         * because that is all we know when the list arrives. Now that the
+         * states are in, prefer the friendly name -- that is the label the
+         * user controls in Home Assistant, which is the whole point of
+         * selecting entities there.
+         */
+        if (dash->label[0]) {
+            int i;
+            for (i = 0; i < dash->nwidgets; i++) {
+                ha_entity *e = ha_store_get(&app.ha.store, dash->widgets[i].entity);
+                if (e && e->name[0]) {
+                    strncpy(dash->widgets[i].label, e->name,
+                            sizeof dash->widgets[i].label - 1);
+                    dash->widgets[i].label[sizeof dash->widgets[i].label - 1] = '\0';
+                }
+            }
+        }
+
         if (dash->nwidgets == 0) {
             printf("ami2ha: GUI needs a CONFIG file describing the dashboard\n"
                    "  Generate one first:\n"
@@ -469,8 +536,16 @@ int main(int argc, char **argv)
         }
 
         app.ui = ui_create(dash, &app.ha, &app.sock, uierr, sizeof uierr);
-        if (app.ui)
+        if (app.ui) {
+            char st[96];
             ui_set_rexx(app.ui, app.rexx);
+            /* The connection is already up by the time the window opens. */
+            sprintf(st, "HA %s, %lu entities",
+                    app.ha.version[0] ? app.ha.version : "?",
+                    (unsigned long)ha_store_count(&app.ha.store));
+            ui_set_status(app.ui, st);
+            ui_refresh_all(app.ui);
+        }
         if (!app.ui) {
             printf("ami2ha: %s\n", uierr);
             rc_exit = RETURN_FAIL;

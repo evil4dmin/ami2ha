@@ -4,6 +4,7 @@
 #include "ami2ha/charset.h"
 
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -237,6 +238,8 @@ static void copy_str(char *dst, size_t dstsz, const char *src)
  * Amiga; both must display correctly, so run display text through the
  * transcoder while leaving entity ids and service names alone.
  */
+static widget_kind kind_for_domain(const char *domain);
+
 static void copy_text(char *dst, size_t dstsz, const char *src)
 {
     charset_utf8_to_latin1(dst, dstsz, src, strlen(src));
@@ -436,6 +439,9 @@ int cfg_parse(a2h_config *cfg, const char *text, size_t len,
             } else if (strcmp(tok, "tokenfile") == 0) {
                 if (next_token(&s, tok, sizeof tok))
                     copy_str(cfg->tokenfile, sizeof cfg->tokenfile, tok);
+            } else if (strcmp(tok, "label") == 0) {
+                if (next_token(&s, tok, sizeof tok))
+                    copy_str(cfg->label, sizeof cfg->label, tok);
             } else if (strcmp(tok, "token") == 0) {
                 if (next_token(&s, tok, sizeof tok))
                     copy_str(cfg->token, sizeof cfg->token, tok);
@@ -508,6 +514,60 @@ static void append_label(a2h_buf *out, const char *label)
     buf_append_str(out, " label \"");
     buf_append_str(out, label);
     buf_append_str(out, "\"");
+}
+
+int cfg_add_discovered(a2h_config *cfg, const char *entity_id,
+                       const char *label)
+{
+    a2h_widget *w;
+    char        dom[24];
+    const char *dot;
+    size_t      n;
+
+    if (!entity_id || !*entity_id)
+        return 0;
+
+    /* A discovered dashboard has one implicit group. */
+    if (cfg->ngroups == 0) {
+        memset(&cfg->groups[0], 0, sizeof cfg->groups[0]);
+        copy_str(cfg->groups[0].title, sizeof cfg->groups[0].title,
+                 label && *label ? label : "Home Assistant");
+        cfg->groups[0].first_widget = 0;
+        cfg->ngroups = 1;
+    }
+
+    if (!ensure_widget_room(cfg))
+        return 0;
+
+    dot = strchr(entity_id, '.');
+    n   = dot ? (size_t)(dot - entity_id) : strlen(entity_id);
+    if (n >= sizeof dom)
+        n = sizeof dom - 1;
+    memcpy(dom, entity_id, n);
+    dom[n] = '\0';
+
+    w = &cfg->widgets[cfg->nwidgets];
+    memset(w, 0, sizeof *w);
+    w->kind     = kind_for_domain(dom);
+    w->group    = 0;
+    w->min      = 0;
+    w->max      = 100;
+    w->decimals = 1;
+    copy_str(w->entity, sizeof w->entity, entity_id);
+
+    if (w->kind == W_BUTTON) {
+        /* scene/script/button are triggered by a service, not toggled. */
+        if (strcmp(dom, "button") == 0 || strcmp(dom, "input_button") == 0)
+            sprintf(w->service, "%.20s.press", dom);
+        else
+            sprintf(w->service, "%.20s.turn_on", dom);
+    }
+
+    label_from_entity(w->label, sizeof w->label, entity_id);
+
+    cfg->groups[0].nwidgets++;
+    cfg->nwidgets++;
+    return 1;
 }
 
 int cfg_generate(a2h_buf *out, const ha_store *store, const a2h_config *base)

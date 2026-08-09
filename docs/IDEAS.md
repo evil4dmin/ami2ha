@@ -9,7 +9,19 @@ room.
 
 Three ways to do it, cheapest first.
 
-### Labels (no custom component)
+### Labels (no custom component) -- IMPLEMENTED
+
+Built. Set `label <name>` in the dashboard file; see the README.
+
+Measured on a real installation before choosing this route:
+
+    config/entity_registry/list                 2,433,832 bytes (3494 entities)
+    render_template label_entities('amiga')           164 bytes
+
+The registry route is not merely wasteful, it is impossible: it exceeds the
+2 MB WebSocket message cap on its own. What follows is the original note.
+
+
 
 Home Assistant has labels. Tag entities with `amiga`, and ami2ha asks the
 entity registry which entities carry that label:

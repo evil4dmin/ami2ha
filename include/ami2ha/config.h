@@ -81,6 +81,13 @@ typedef struct {
     int  port;
     char tokenfile[CFG_PATH_MAX];
     char token[CFG_TOKEN_MAX];
+    /*
+     * When set, the entities come from Home Assistant: everything tagged
+     * with this label, rather than the widgets listed below. Lets the
+     * selection be made in the HA UI instead of in this file.
+     */
+    char label[48];
+
     int  columns;      /* dashboard columns; 0 = let MUI decide */
     int  refresh_secs; /* application-level ping interval       */
 
@@ -111,6 +118,14 @@ void cfg_free(a2h_config *cfg);
  */
 int cfg_parse(a2h_config *cfg, const char *text, size_t len,
               char *err, size_t errsz);
+
+/*
+ * Append a widget, inferring its kind from the entity's domain. Used when
+ * the dashboard is discovered from Home Assistant rather than written out.
+ * Returns 0 if the cap or memory is reached.
+ */
+int cfg_add_discovered(a2h_config *cfg, const char *entity_id,
+                       const char *label);
 
 /* Human-readable name of a widget kind, for error messages and the editor. */
 const char *cfg_widget_kind_name(widget_kind k);

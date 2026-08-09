@@ -621,6 +621,114 @@ static void test_no_filter_stores_everything(void)
     ha_client_free(&c);
 }
 
+static int discovered_count;
+static char discovered[8][HA_ENTITY_ID_MAX];
+
+static void on_discovered(ha_client *c, const char *const *ids, int n, void *user)
+{
+    int i;
+    (void)c; (void)user;
+    discovered_count = n;
+    for (i = 0; i < n && i < 8; i++) {
+        strncpy(discovered[i], ids[i], HA_ENTITY_ID_MAX - 1);
+        discovered[i][HA_ENTITY_ID_MAX - 1] = 0;
+    }
+}
+
+static void test_label_discovery(void)
+{
+    /*
+     * Entities chosen in Home Assistant by label. Asking the entity
+     * registry would mean downloading every entity in the installation --
+     * 2.4 MB on a real system. A rendered template returns just the ids.
+     */
+    ha_client   c;
+    probe       p;
+    fake_server s;
+    char        msg[512];
+
+    setup(&c, &p);
+    server_init(&s);
+    c.cb.entities_discovered = on_discovered;
+    discovered_count = 0;
+
+    ha_client_set_label(&c, "amiga");
+    ha_client_begin(&c);
+    buf_reset(ha_client_out(&c));
+    complete_handshake(&c);
+    server_send(&c, "{\"type\":\"auth_required\"}");
+    CHECK(server_recv(&s, &c, msg, sizeof msg));    /* auth */
+    server_send(&c, "{\"type\":\"auth_ok\"}");
+
+    /* It asks for the label, not for the registry and not for all states. */
+    CHECK(server_recv(&s, &c, msg, sizeof msg));
+    CHECK(strstr(msg, "\"type\":\"render_template\"") != NULL);
+    CHECK(strstr(msg, "label_entities(") != NULL);
+    CHECK(strstr(msg, "amiga") != NULL);
+    CHECK(strstr(msg, "entity_registry") == NULL);
+    CHECK(strstr(msg, "get_states") == NULL);
+
+    /* The template answers with the ids. */
+    CHECK_INT(server_send(&c,
+        "{\"id\":1,\"type\":\"event\",\"event\":{\"result\":"
+        "\"light.kitchen,sensor.temp\",\"listeners\":{\"all\":false}}}"), 1);
+
+    CHECK_INT(discovered_count, 2);
+    CHECK_STR(discovered[0], "light.kitchen");
+    CHECK_STR(discovered[1], "sensor.temp");
+
+    /* A one-shot answer: the template subscription is cancelled... */
+    CHECK(server_recv(&s, &c, msg, sizeof msg));
+    CHECK(strstr(msg, "\"type\":\"unsubscribe_events\"") != NULL);
+
+    /* ...and it subscribes to exactly those entities. */
+    CHECK(server_recv(&s, &c, msg, sizeof msg));
+    CHECK(strstr(msg, "\"type\":\"subscribe_entities\"") != NULL);
+    CHECK(strstr(msg, "light.kitchen") != NULL);
+    CHECK(strstr(msg, "sensor.temp") != NULL);
+
+    /* State then flows as usual. */
+    CHECK_INT(server_send(&c,
+        "{\"id\":3,\"type\":\"event\",\"event\":{\"a\":{"
+        "\"light.kitchen\":{\"s\":\"on\"},"
+        "\"sensor.temp\":{\"s\":\"19\"}}}}"), 1);
+    CHECK_INT(c.state, HA_ST_READY);
+    CHECK_INT(ha_store_count(&c.store), 2);
+
+    server_free(&s);
+    ha_client_free(&c);
+}
+
+static void test_label_with_no_entities(void)
+{
+    /* An unused label is a configuration mistake worth naming, not an
+     * empty window the user has to puzzle over. */
+    ha_client   c;
+    probe       p;
+    fake_server s;
+    char        msg[512];
+
+    setup(&c, &p);
+    server_init(&s);
+    ha_client_set_label(&c, "typo");
+
+    ha_client_begin(&c);
+    buf_reset(ha_client_out(&c));
+    complete_handshake(&c);
+    server_send(&c, "{\"type\":\"auth_required\"}");
+    server_recv(&s, &c, msg, sizeof msg);
+    server_send(&c, "{\"type\":\"auth_ok\"}");
+    server_recv(&s, &c, msg, sizeof msg);
+
+    CHECK_INT(server_send(&c,
+        "{\"id\":1,\"type\":\"event\",\"event\":{\"result\":\"\"}}"), 0);
+    CHECK_INT(c.state, HA_ST_FAILED);
+    CHECK(strstr(p.last_failure, "typo") != NULL);
+
+    server_free(&s);
+    ha_client_free(&c);
+}
+
 void suite_ha(void)
 {
     RUN(test_full_session);
@@ -636,4 +744,6 @@ void suite_ha(void)
     RUN(test_garbage_message_fails_cleanly);
     RUN(test_entity_filter);
     RUN(test_no_filter_stores_everything);
+    RUN(test_label_discovery);
+    RUN(test_label_with_no_entities);
 }
