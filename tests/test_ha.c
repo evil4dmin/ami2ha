@@ -521,6 +521,72 @@ static void test_garbage_message_fails_cleanly(void)
     ha_client_free(&c);
 }
 
+static void test_entity_filter(void)
+{
+    /*
+     * A real installation reported 2079 entities and a 0.94 MB state dump.
+     * Keeping all of that costs hundreds of KB the dashboard has no use
+     * for, so a client with a filter must parse everything and store only
+     * what was asked for.
+     */
+    ha_client c;
+    probe     p;
+    static const char *wanted[] = { "light.kitchen", "sensor.temp" };
+
+    setup(&c, &p);
+    ha_client_set_filter(&c, wanted, 2);
+
+    ha_client_begin(&c);
+    buf_reset(ha_client_out(&c));
+    complete_handshake(&c);
+    server_send(&c, "{\"type\":\"auth_required\"}");
+    server_send(&c, "{\"type\":\"auth_ok\"}");
+    server_send(&c,
+        "{\"id\":1,\"type\":\"result\",\"success\":true,\"result\":["
+        "{\"entity_id\":\"light.kitchen\",\"state\":\"on\"},"
+        "{\"entity_id\":\"sensor.noise_1\",\"state\":\"1\"},"
+        "{\"entity_id\":\"sensor.temp\",\"state\":\"21\"},"
+        "{\"entity_id\":\"sensor.noise_2\",\"state\":\"2\"}]}");
+
+    CHECK_INT(c.state, HA_ST_READY);
+    CHECK_INT(ha_store_count(&c.store), 2);
+    CHECK(ha_store_get(&c.store, "light.kitchen") != NULL);
+    CHECK(ha_store_get(&c.store, "sensor.temp") != NULL);
+    CHECK(ha_store_get(&c.store, "sensor.noise_1") == NULL);
+
+    /* Events for unwanted entities must be dropped too, not accumulate. */
+    server_send(&c, "{\"id\":2,\"type\":\"event\",\"event\":{\"data\":{"
+                    "\"new_state\":{\"entity_id\":\"sensor.noise_3\",\"state\":\"9\"}}}}");
+    CHECK_INT(ha_store_count(&c.store), 2);
+
+    /* ...while a wanted one still updates. */
+    server_send(&c, "{\"id\":2,\"type\":\"event\",\"event\":{\"data\":{"
+                    "\"new_state\":{\"entity_id\":\"sensor.temp\",\"state\":\"22\"}}}}");
+    CHECK_STR(ha_store_get(&c.store, "sensor.temp")->state, "22");
+
+    ha_client_free(&c);
+}
+
+static void test_no_filter_stores_everything(void)
+{
+    ha_client c;
+    probe     p;
+
+    setup(&c, &p);
+    ha_client_begin(&c);
+    buf_reset(ha_client_out(&c));
+    complete_handshake(&c);
+    server_send(&c, "{\"type\":\"auth_required\"}");
+    server_send(&c, "{\"type\":\"auth_ok\"}");
+    server_send(&c,
+        "{\"id\":1,\"type\":\"result\",\"success\":true,\"result\":["
+        "{\"entity_id\":\"a.one\",\"state\":\"1\"},"
+        "{\"entity_id\":\"b.two\",\"state\":\"2\"}]}");
+
+    CHECK_INT(ha_store_count(&c.store), 2);
+    ha_client_free(&c);
+}
+
 void suite_ha(void)
 {
     RUN(test_full_session);
@@ -534,4 +600,6 @@ void suite_ha(void)
     RUN(test_unchanged_state_does_not_notify);
     RUN(test_removed_entity_event);
     RUN(test_garbage_message_fails_cleanly);
+    RUN(test_entity_filter);
+    RUN(test_no_filter_stores_everything);
 }

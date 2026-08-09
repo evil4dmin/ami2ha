@@ -74,6 +74,14 @@ struct ha_client {
     unsigned long rng;            /* frame-mask source */
 
     int http_done;                /* upgrade response consumed */
+
+    /*
+     * Optional whitelist. A large Home Assistant reports a couple of
+     * thousand entities; keeping them all costs hundreds of KB that a
+     * dashboard showing a dozen controls has no use for.
+     */
+    const char *const *filter;
+    int                filter_count;
 };
 
 /*
@@ -85,6 +93,13 @@ struct ha_client {
 int  ha_client_init(ha_client *c, const ha_config *cfg,
                     const ha_callbacks *cb, unsigned long seed);
 void ha_client_free(ha_client *c);
+
+/*
+ * Restrict the store to `ids`. The array is borrowed and must outlive the
+ * client. Pass NULL to store every entity, which is what the command line
+ * LIST wants.
+ */
+void ha_client_set_filter(ha_client *c, const char *const *ids, int count);
 
 /* Reset to IDLE, keeping configuration, so a reconnect can reuse it. */
 void ha_client_reset(ha_client *c);

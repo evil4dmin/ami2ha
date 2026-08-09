@@ -266,6 +266,8 @@ int main(int argc, char **argv)
     a2h_config     *dash = NULL;
     char            token[HA_TOKEN_MAX];
     long            deadline_ms;
+    const char     *filter_ids[CFG_MAX_WIDGETS];
+    int             nfilter = 0;
     int             rc_exit = RETURN_OK;
     int             rc;
 
@@ -401,6 +403,23 @@ int main(int argc, char **argv)
         FreeArgs(rda);
         FreeDosObject(DOS_RDARGS, rdargs);
         return RETURN_FAIL;
+    }
+
+    /*
+     * When a dashboard is loaded, keep only the entities it refers to. A
+     * large installation reports a couple of thousand, which would cost
+     * hundreds of KB to store for no benefit. LIST and WRITECONFIG want
+     * the full picture, so they opt out.
+     */
+    if (dash->nwidgets > 0 && !args.list && !args.writeconfig) {
+        int i;
+
+        for (i = 0; i < dash->nwidgets && nfilter < (int)A2H_ARRAY_LEN(filter_ids); i++)
+            if (dash->widgets[i].entity[0])
+                filter_ids[nfilter++] = dash->widgets[i].entity;
+
+        if (nfilter > 0)
+            ha_client_set_filter(&app.ha, filter_ids, nfilter);
     }
 
     printf("ami2ha: connecting to %s:%d ...\n", cfg.host, cfg.port);

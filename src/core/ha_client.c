@@ -86,6 +86,24 @@ void ha_client_free(ha_client *c)
     ha_store_free(&c->store);
 }
 
+void ha_client_set_filter(ha_client *c, const char *const *ids, int count)
+{
+    c->filter       = ids;
+    c->filter_count = (ids && count > 0) ? count : 0;
+}
+
+static int entity_wanted(const ha_client *c, const char *id)
+{
+    int i;
+
+    if (!c->filter || c->filter_count == 0)
+        return 1;
+    for (i = 0; i < c->filter_count; i++)
+        if (c->filter[i] && strcmp(c->filter[i], id) == 0)
+            return 1;
+    return 0;
+}
+
 void ha_client_reset(ha_client *c)
 {
     buf_reset(&c->in);
@@ -227,6 +245,11 @@ static ha_entity *apply_state_object(ha_client *c, json_parser *jp)
     }
 
     if (!id[0])
+        return NULL;
+
+    /* Parsed, then dropped: the message still has to be walked, but nothing
+     * is stored for entities no dashboard refers to. */
+    if (!entity_wanted(c, id))
         return NULL;
 
     e = ha_store_put(&c->store, id);
