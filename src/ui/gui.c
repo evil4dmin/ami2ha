@@ -161,7 +161,7 @@ static Object *make_label(const char *text)
     return MUI_NewObject(MUIC_Text,
         MUIA_Text_Contents,  (IPTR)text,
         MUIA_Text_PreParse,  (IPTR)"\33l",
-        MUIA_Weight,         (IPTR)50,
+        MUIA_Weight,         (IPTR)100,
         TAG_DONE);
 }
 
@@ -184,10 +184,17 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
         break;
 
     case W_SENSOR:
+        /*
+         * FixWidthTxt reserves room for a representative reading. Without
+         * it the object is only as wide as whatever it happens to show at
+         * layout time, so the window collapses and later, longer values are
+         * clipped -- "21.4 °C" becoming "21." as soon as the reading grows.
+         */
         uw->value = MUI_NewObject(MUIC_Text,
-            MUIA_Text_Contents, (IPTR)uw->text,
-            MUIA_Text_PreParse, (IPTR)"\33r",
-            MUIA_Frame,         MUIV_Frame_Text,
+            MUIA_Text_Contents,  (IPTR)uw->text,
+            MUIA_Text_PreParse,  (IPTR)"\33r",
+            MUIA_Frame,          MUIV_Frame_Text,
+            MUIA_FixWidthTxt,    (IPTR)"-8888.8 XXXX",
             TAG_DONE);
         if (!uw->value)
             return 0;
@@ -205,6 +212,7 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             MUIA_Gauge_Current, (IPTR)0,
             MUIA_Gauge_InfoText,(IPTR)uw->text,
             MUIA_Frame,         MUIV_Frame_Gauge,
+            MUIA_FixWidthTxt,   (IPTR)"-8888.8 XXXX",
             TAG_DONE);
         if (!uw->value)
             return 0;
@@ -293,6 +301,7 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
     ui->status = MUI_NewObject(MUIC_Text,
         MUIA_Text_Contents, (IPTR)ui->status_text,
         MUIA_Text_PreParse, (IPTR)"\33l",
+        MUIA_Frame,         MUIV_Frame_Text,
         TAG_DONE);
 
     /* An empty group to hang the configured groups off; children are added
