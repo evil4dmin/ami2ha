@@ -272,6 +272,33 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
     return 0;
 }
 
+/*
+ * Bind each control to the loop, reporting its own widget index. Called
+ * again after a rebuild: the old controls are disposed along with their
+ * notifications, so new ones have to be bound or nothing a toggle or a
+ * button does ever reaches the event loop.
+ */
+static void bind_controls(a2h_ui *ui)
+{
+    int i;
+
+    for (i = 0; i < ui->nwidgets; i++) {
+        const a2h_widget *w = &ui->cfg->widgets[i];
+
+        if (!ui->widgets[i].control)
+            continue;
+
+        if (w->kind == W_TOGGLE)
+            DoMethod(ui->widgets[i].control, MUIM_Notify, MUIA_Selected,
+                     MUIV_EveryTime, (IPTR)ui->app, 2,
+                     MUIM_Application_ReturnID, ID_WIDGET_BASE + i);
+        else if (w->kind == W_BUTTON)
+            DoMethod(ui->widgets[i].control, MUIM_Notify, MUIA_Pressed, FALSE,
+                     (IPTR)ui->app, 2,
+                     MUIM_Application_ReturnID, ID_WIDGET_BASE + i);
+    }
+}
+
 /* Create one framed box per configured group and fill it with widgets. */
 static void build_groups(a2h_ui *ui)
 {
@@ -357,6 +384,7 @@ void ui_rebuild(a2h_ui *ui)
     }
 
     build_groups(ui);
+    bind_controls(ui);
 
     DoMethod(ui->root, MUIM_Group_ExitChange);
 
@@ -368,7 +396,6 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
 {
     a2h_ui *ui;
     Object *root;
-    int     g, i;
 
     if (!ui_libs_open()) {
         strncpy(err, "cannot open muimaster.library (is MUI installed?)",
@@ -483,22 +510,7 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
     DoMethod(ui->win, MUIM_Notify, MUIA_Window_CloseRequest, TRUE,
              (IPTR)ui->app, 2, MUIM_Application_ReturnID, ID_QUIT);
 
-    /* Each control reports its own widget index back to the loop. */
-    for (i = 0; i < ui->nwidgets; i++) {
-        const a2h_widget *w = &cfg->widgets[i];
-
-        if (!ui->widgets[i].control)
-            continue;
-
-        if (w->kind == W_TOGGLE)
-            DoMethod(ui->widgets[i].control, MUIM_Notify, MUIA_Selected,
-                     MUIV_EveryTime, (IPTR)ui->app, 2,
-                     MUIM_Application_ReturnID, ID_WIDGET_BASE + i);
-        else if (w->kind == W_BUTTON)
-            DoMethod(ui->widgets[i].control, MUIM_Notify, MUIA_Pressed, FALSE,
-                     (IPTR)ui->app, 2,
-                     MUIM_Application_ReturnID, ID_WIDGET_BASE + i);
-    }
+    bind_controls(ui);
 
     ui->editor = editor_create(ui->app, cfg, ha, ui->cfgpath);
 
