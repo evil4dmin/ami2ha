@@ -227,7 +227,8 @@ back. See [docs/AREXX.md](docs/AREXX.md) for the full command set.
 - [ ] Reconnect handling and connection status UI
 - [x] ARexx host port
 - [ ] Optional AmiSSL support
-- [ ] Installer, icons, documentation
+- [x] Workbench launch via icon tool types (WRITEICON)
+- [ ] Installer and documentation
 
 ## Contributing
 
