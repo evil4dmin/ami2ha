@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <string.h>
 
+static void notify_changed(ha_client *c, ha_entity *e);
+
 /* Attributes with a dedicated field, or too bulky to be worth keeping. */
 static const char *const skipped_attrs[] = {
     "friendly_name", "unit_of_measurement", "device_class",
@@ -264,6 +266,65 @@ static ha_entity *apply_state_object(ha_client *c, json_parser *jp)
     return e;
 }
 
+/*
+ * subscribe_entities reports state in a compressed shape rather than as
+ * full state objects: "s" is the state, "a" the attributes. This is the
+ * per-entity body, with the parser positioned after its OBJECT_BEGIN.
+ */
+static ha_entity *apply_compact_entity(ha_client *c, const char *id,
+                                       json_parser *jp)
+{
+    json_token  tok;
+    char        state[HA_STATE_MAX] = "";
+    const char *attrs_at            = NULL;
+    ha_entity  *e;
+
+    while (json_next(jp, &tok) == JSON_KEY) {
+        int       is_s = json_key_is(&tok, "s");
+        int       is_a = json_key_is(&tok, "a");
+        json_type vt   = json_next(jp, &tok);
+
+        if (is_s && vt == JSON_STRING) {
+            json_str_copy(&tok, state, sizeof state);
+        } else if (is_a && vt == JSON_OBJECT_BEGIN) {
+            attrs_at = tok.start;
+            json_skip(jp, &tok);
+        } else {
+            json_skip(jp, &tok);
+        }
+    }
+
+    if (!entity_wanted(c, id))
+        return NULL;
+
+    e = ha_store_put(&c->store, id);
+    if (!e)
+        return NULL;
+
+    if (state[0])
+        ha_entity_set_state(e, state);
+    if (attrs_at)
+        apply_attributes(e, attrs_at, (size_t)(jp->end - attrs_at));
+
+    return e;
+}
+
+/* A change entry wraps the new values in "+" (and removals in "-"). */
+static void apply_compact_change(ha_client *c, const char *id, json_parser *jp)
+{
+    json_token tok;
+
+    while (json_next(jp, &tok) == JSON_KEY) {
+        int       is_plus = json_key_is(&tok, "+");
+        json_type vt      = json_next(jp, &tok);
+
+        if (is_plus && vt == JSON_OBJECT_BEGIN)
+            notify_changed(c, apply_compact_entity(c, id, jp));
+        else
+            json_skip(jp, &tok);
+    }
+}
+
 static void notify_changed(ha_client *c, ha_entity *e)
 {
     if (e && e->changed && c->cb.entity_changed)
@@ -278,6 +339,38 @@ static void send_initial_requests(ha_client *c)
 {
     char msg[64];
     int  n;
+
+    /*
+     * With a dashboard loaded, ask for exactly its entities.
+     *
+     * get_states returns the whole installation: measured at 0.94 MB and
+     * 2079 entities on a real system, which has to be buffered in full
+     * before it can be parsed. subscribe_entities sends only the requested
+     * entities and then streams deltas, turning that into a few KB -- the
+     * difference between fitting on a classic Amiga and not.
+     */
+    if (c->filter && c->filter_count > 0) {
+        a2h_buf m;
+        int     i;
+
+        buf_init(&m);
+        c->subscribe_id = c->next_id++;
+        buf_printf(&m, "{\"id\":%lu,\"type\":\"subscribe_entities\","
+                       "\"entity_ids\":[", c->subscribe_id);
+        for (i = 0; i < c->filter_count; i++) {
+            if (i)
+                buf_append_str(&m, ",");
+            buf_append_json_string(&m, c->filter[i]);
+        }
+        buf_append_str(&m, "]}");
+
+        if (!m.failed)
+            send_text(c, (const char *)m.data, m.len);
+        buf_free(&m);
+
+        c->state = HA_ST_LOADING;
+        return;
+    }
 
     c->states_id = c->next_id++;
     n = sprintf(msg, "{\"id\":%lu,\"type\":\"get_states\"}", c->states_id);
@@ -340,8 +433,50 @@ static void handle_event(ha_client *c, json_parser *jp, json_token *tok)
     }
 
     while (json_next(jp, &t) == JSON_KEY) {
-        int is_data = json_key_is(&t, "data");
+        int is_data  = json_key_is(&t, "data");
+        int is_added = json_key_is(&t, "a");
+        int is_chg   = json_key_is(&t, "c");
+        int is_rem   = json_key_is(&t, "r");
         json_type vt = json_next(jp, &t);
+
+        /* subscribe_entities: "a" = full state, "c" = deltas, "r" = gone. */
+        if ((is_added || is_chg) && vt == JSON_OBJECT_BEGIN) {
+            json_token ent;
+
+            while (json_next(jp, &ent) == JSON_KEY) {
+                char id[HA_ENTITY_ID_MAX];
+                json_type evt;
+
+                json_str_copy(&ent, id, sizeof id);
+                evt = json_next(jp, &ent);
+                if (evt != JSON_OBJECT_BEGIN) {
+                    json_skip(jp, &ent);
+                    continue;
+                }
+                if (is_added)
+                    notify_changed(c, apply_compact_entity(c, id, jp));
+                else
+                    apply_compact_change(c, id, jp);
+            }
+
+            /* The first "a" block completes the initial load. */
+            if (is_added && c->state == HA_ST_LOADING) {
+                c->state = HA_ST_READY;
+                if (c->cb.ready)
+                    c->cb.ready(c, c->cb.user);
+            }
+            continue;
+        }
+
+        if (is_rem && vt == JSON_ARRAY_BEGIN) {
+            json_token gone;
+            while (json_next(jp, &gone) == JSON_STRING) {
+                char id[HA_ENTITY_ID_MAX];
+                json_str_copy(&gone, id, sizeof id);
+                ha_store_remove(&c->store, id);
+            }
+            continue;
+        }
 
         if (!is_data || vt != JSON_OBJECT_BEGIN) {
             json_skip(jp, &t);

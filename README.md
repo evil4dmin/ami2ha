@@ -20,8 +20,11 @@ ARexx port so the rest of your Workbench can join in.
 | **Minimum** | 68000 builds are produced, but JSON over TCP on a stock A500 will be slow |
 | **Portable to** | AmigaOS 4, MorphOS and AROS — the sources avoid OS3-only idioms and use the SDI headers for register and hook conventions |
 
-Roughly 2 MB of free RAM is expected for a medium-sized Home Assistant
-installation; the exact figure depends on how many entities you subscribe to.
+Memory use follows the size of your *dashboard*, not the size of your Home
+Assistant. A dashboard is a list of entities, and ami2ha asks the server for
+exactly those via `subscribe_entities` -- measured against a real
+installation with 2079 entities, that is **1.3 KB instead of 960 KB**, and
+no wasted parsing. A few hundred KB free is comfortable.
 
 ## Architecture at a glance
 

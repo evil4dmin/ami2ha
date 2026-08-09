@@ -524,46 +524,80 @@ static void test_garbage_message_fails_cleanly(void)
 static void test_entity_filter(void)
 {
     /*
-     * A real installation reported 2079 entities and a 0.94 MB state dump.
-     * Keeping all of that costs hundreds of KB the dashboard has no use
-     * for, so a client with a filter must parse everything and store only
-     * what was asked for.
+     * A real installation reported 2079 entities and a 0.94 MB get_states
+     * payload. With a dashboard loaded we ask for only its entities via
+     * subscribe_entities, which answers in a compressed shape: "a" for the
+     * initial set, "c" for deltas, "r" for removals.
      */
-    ha_client c;
-    probe     p;
+    ha_client   c;
+    probe       p;
+    fake_server s;
+    char        msg[512];
     static const char *wanted[] = { "light.kitchen", "sensor.temp" };
 
     setup(&c, &p);
+    server_init(&s);
     ha_client_set_filter(&c, wanted, 2);
 
     ha_client_begin(&c);
     buf_reset(ha_client_out(&c));
     complete_handshake(&c);
     server_send(&c, "{\"type\":\"auth_required\"}");
+    CHECK(server_recv(&s, &c, msg, sizeof msg));   /* the auth message */
     server_send(&c, "{\"type\":\"auth_ok\"}");
-    server_send(&c,
-        "{\"id\":1,\"type\":\"result\",\"success\":true,\"result\":["
-        "{\"entity_id\":\"light.kitchen\",\"state\":\"on\"},"
-        "{\"entity_id\":\"sensor.noise_1\",\"state\":\"1\"},"
-        "{\"entity_id\":\"sensor.temp\",\"state\":\"21\"},"
-        "{\"entity_id\":\"sensor.noise_2\",\"state\":\"2\"}]}");
+
+    /* It must ask for exactly the dashboard's entities, and not for the
+     * whole installation. */
+    CHECK(server_recv(&s, &c, msg, sizeof msg));
+    CHECK(strstr(msg, "\"type\":\"subscribe_entities\"") != NULL);
+    CHECK(strstr(msg, "\"light.kitchen\"") != NULL);
+    CHECK(strstr(msg, "\"sensor.temp\"") != NULL);
+    CHECK(strstr(msg, "get_states") == NULL);
+
+    /* "a": the initial set, in compressed form. */
+    CHECK_INT(server_send(&c,
+        "{\"id\":2,\"type\":\"event\",\"event\":{\"a\":{"
+        "\"light.kitchen\":{\"s\":\"on\",\"a\":{\"friendly_name\":\"Kitchen\","
+        "\"brightness\":128}},"
+        "\"sensor.temp\":{\"s\":\"21.4\",\"a\":{\"unit_of_measurement\":\"C\"}}"
+        "}}}"), 1);
 
     CHECK_INT(c.state, HA_ST_READY);
+    CHECK_INT(p.ready_calls, 1);
     CHECK_INT(ha_store_count(&c.store), 2);
-    CHECK(ha_store_get(&c.store, "light.kitchen") != NULL);
-    CHECK(ha_store_get(&c.store, "sensor.temp") != NULL);
-    CHECK(ha_store_get(&c.store, "sensor.noise_1") == NULL);
+    CHECK_STR(ha_store_get(&c.store, "light.kitchen")->state, "on");
+    CHECK_STR(ha_store_get(&c.store, "light.kitchen")->name, "Kitchen");
+    CHECK_STR(ha_store_get(&c.store, "sensor.temp")->state, "21.4");
+    CHECK_STR(ha_store_get(&c.store, "sensor.temp")->unit, "C");
+    {
+        const char *b = ha_entity_attr(ha_store_get(&c.store, "light.kitchen"),
+                                       "brightness");
+        CHECK(b != NULL);
+        if (b) CHECK_STR(b, "128");
+    }
 
-    /* Events for unwanted entities must be dropped too, not accumulate. */
-    server_send(&c, "{\"id\":2,\"type\":\"event\",\"event\":{\"data\":{"
-                    "\"new_state\":{\"entity_id\":\"sensor.noise_3\",\"state\":\"9\"}}}}");
+    /* "c": a delta, wrapped in "+". */
+    p.changed_calls = 0;
+    CHECK_INT(server_send(&c,
+        "{\"id\":2,\"type\":\"event\",\"event\":{\"c\":{"
+        "\"sensor.temp\":{\"+\":{\"s\":\"22.1\"}}}}}"), 1);
+    CHECK_STR(ha_store_get(&c.store, "sensor.temp")->state, "22.1");
+    CHECK_INT(p.changed_calls, 1);
     CHECK_INT(ha_store_count(&c.store), 2);
 
-    /* ...while a wanted one still updates. */
-    server_send(&c, "{\"id\":2,\"type\":\"event\",\"event\":{\"data\":{"
-                    "\"new_state\":{\"entity_id\":\"sensor.temp\",\"state\":\"22\"}}}}");
-    CHECK_STR(ha_store_get(&c.store, "sensor.temp")->state, "22");
+    /* An entity we never asked for must still be ignored if it turns up. */
+    CHECK_INT(server_send(&c,
+        "{\"id\":2,\"type\":\"event\",\"event\":{\"a\":{"
+        "\"sensor.noise\":{\"s\":\"9\"}}}}"), 1);
+    CHECK_INT(ha_store_count(&c.store), 2);
 
+    /* "r": removal. */
+    CHECK_INT(server_send(&c,
+        "{\"id\":2,\"type\":\"event\",\"event\":{\"r\":[\"sensor.temp\"]}}"), 1);
+    CHECK_INT(ha_store_count(&c.store), 1);
+    CHECK(ha_store_get(&c.store, "sensor.temp") == NULL);
+
+    server_free(&s);
     ha_client_free(&c);
 }
 
