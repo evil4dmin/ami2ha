@@ -251,7 +251,7 @@ static unsigned long make_seed(void)
          ^ (unsigned long)(IPTR)&ds;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     struct cli_args args;
     struct RDArgs  *rda;
@@ -277,24 +277,18 @@ int main(void)
      * With nothing to parse it falls back to reading arguments from the
      * input stream. From an interactive Shell that merely waits for a line;
      * launched by something whose input is a pipe that never closes, it
-     * blocks forever, and Ctrl-C cannot interrupt that read. RDAF_NOPROMPT
-     * alone does not prevent it -- that flag only suppresses the prompt.
-     * So check the raw argument string first and print usage instead.
+     * blocks forever inside a Read() that Ctrl-C cannot interrupt.
+     * RDAF_NOPROMPT does not prevent that -- it only suppresses the prompt.
+     *
+     * argc is the reliable signal here: it is correct both from a Shell and
+     * when launched by another program, whereas GetArgStr() proved not to
+     * be. argc is 0 when started from Workbench, which also has no command
+     * line to parse.
      */
-    {
-        const char *as = (const char *)GetArgStr();
-        int         have_args = 0;
-
-        if (as) {
-            while (*as) {
-                if (*as > ' ') { have_args = 1; break; }
-                as++;
-            }
-        }
-        if (!have_args) {
-            usage();
-            return RETURN_WARN;
-        }
+    A2H_UNUSED(argv);
+    if (argc < 2) {
+        usage();
+        return RETURN_WARN;
     }
 
     /*
