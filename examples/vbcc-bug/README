@@ -1,0 +1,10 @@
+Reproducer for the vbcc -O=2 register-parameter bug.
+See ../../docs/vbcc-O2-bug.md for the full write-up.
+
+    vc +aos68k -c99 -cpu=68020 -O=1 -S bug.c    # correct: a6 is loaded
+    vc +aos68k -c99 -cpu=68020 -O=2 -S bug.c    # wrong:   a6 is not
+
+bug.O1.asm and bug.O2.asm are the outputs as produced here, for comparison
+without needing the toolchain to hand.
+
+Affected -O values: 2 and 6 -- that is, bit 1 set while bit 0 is clear.
