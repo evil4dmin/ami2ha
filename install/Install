@@ -11,13 +11,14 @@
 
 (set @app-name "ami2ha")
 
+; Keep this short. The Installer draws its own "Set Installation Mode"
+; panel over the lower part of the welcome window, so a tall message
+; ends up half-hidden behind it. Everything else belongs in the help
+; text and the closing message.
 (set #welcome
-  (cat "ami2ha 0.1\n\n"
-       "A Home Assistant client for AmigaOS.\n\n"
-       "This installs one program, its manual, and a starter\n"
-       "configuration into a drawer of your choosing.\n\n"
-       "You will need a long-lived access token from Home\n"
-       "Assistant. The manual explains where to find it."
+  (cat "ami2ha 0.1 -- a Home Assistant client for AmigaOS.\n\n"
+       "Installs the program and its manual into a drawer\n"
+       "you choose."
   )
 )
 
@@ -221,40 +222,33 @@
 ;; Done
 ;; ------------------------------------------------------------------
 
+; Keep this short too. The Installer sizes this window from the text but
+; clips whatever will not fit above the buttons, so a long message loses
+; its last line -- which is the line that says what to do next. Naming
+; the files rather than their full paths is both shorter and no less
+; clear: they are in the drawer it just named.
 (set #next "")
 
 (if (= (strlen hostname) 0)
-  (set #next
-    (cat #next
-         "Open this file in a text editor:\n\n  " cfgfile "\n\n"
-         "and change the commented-out 'host' line to your\n"
-         "Home Assistant's address.\n\n"
-    )
-  )
+  (set #next (cat #next "  Set the 'host' line in ami2ha.cfg\n"))
 )
 
 (if (NOT (exists tokfile))
-  (set #next
-    (cat #next
-         "Put your Home Assistant access token, on a line of\n"
-         "its own, in\n\n  " tokfile "\n\n"
-         "The manual explains where to get one.\n\n"
-    )
-  )
+  (set #next (cat #next "  Put your access token in ha.token\n"))
 )
 
 (if (= (strlen #next) 0)
   (set #done
-    (cat "ami2ha is installed in\n\n  " destdir "\n\n"
+    (cat "ami2ha is installed in\n" destdir "\n\n"
          "Double-click its icon to start.\n\n"
-         "Read ami2ha.guide for what everything does."
+         "See ami2ha.guide for what everything does."
     )
   )
   (set #done
-    (cat "ami2ha is installed in\n\n  " destdir "\n\n"
+    (cat "ami2ha is installed in\n" destdir "\n\n"
          "Before it can connect:\n\n"
          #next
-         "Then double-click its icon. ami2ha.guide has the details."
+         "\nSee ami2ha.guide for the details."
     )
   )
 )
