@@ -338,6 +338,37 @@ static void build_groups(a2h_ui *ui)
 }
 
 /*
+ * Build the dashboard's contents from the configuration: the widget
+ * table, the group boxes and the notifications that make the controls
+ * report back.
+ *
+ * The first build and every rebuild both go through here. They used to be
+ * written out separately, which is how they came apart: a rebuild disposes
+ * every gadget, a disposed gadget takes its notifications with it, and the
+ * rebuild did not put them back, so after any visit to the settings window
+ * the toggles quietly stopped doing anything. Anything that has to be true
+ * of the dashboard belongs in this one function.
+ */
+static int build_dashboard(a2h_ui *ui)
+{
+    /* The widget table is indexed by configuration order, so it has to
+     * match the configuration's size. */
+    int        want  = ui->cfg->nwidgets > 0 ? ui->cfg->nwidgets : 1;
+    ui_widget *fresh = (ui_widget *)calloc((size_t)want, sizeof *fresh);
+
+    if (!fresh)
+        return 0;
+
+    free(ui->widgets);
+    ui->widgets  = fresh;
+    ui->nwidgets = ui->cfg->nwidgets;
+
+    build_groups(ui);
+    bind_controls(ui);
+    return 1;
+}
+
+/*
  * Replace the window's contents after the settings window changed them.
  * MUI allows a group's children to be swapped while the window is open,
  * provided the change is bracketed by InitChange/ExitChange.
@@ -371,20 +402,7 @@ void ui_rebuild(a2h_ui *ui)
         }
     }
 
-    /* The widget table is indexed by configuration order, so it has to grow
-     * with it. */
-    {
-        int want = ui->cfg->nwidgets > 0 ? ui->cfg->nwidgets : 1;
-        ui_widget *grown = (ui_widget *)calloc((size_t)want, sizeof *grown);
-        if (grown) {
-            free(ui->widgets);
-            ui->widgets  = grown;
-            ui->nwidgets = ui->cfg->nwidgets;
-        }
-    }
-
-    build_groups(ui);
-    bind_controls(ui);
+    build_dashboard(ui);
 
     DoMethod(ui->root, MUIM_Group_ExitChange);
 
@@ -417,16 +435,6 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
     if (cfgpath)
         strncpy(ui->cfgpath, cfgpath, sizeof ui->cfgpath - 1);
 
-    ui->nwidgets = cfg->nwidgets;
-    ui->widgets  = (ui_widget *)calloc((size_t)(cfg->nwidgets > 0 ? cfg->nwidgets : 1),
-                                       sizeof(ui_widget));
-    if (!ui->widgets) {
-        strncpy(err, "out of memory", errsz - 1);
-        free(ui);
-        ui_libs_close();
-        return NULL;
-    }
-
     strcpy(ui->status_text, "Connecting...");
     strcpy(ui->status_idle, ui->status_text);
 
@@ -446,13 +454,10 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
 
     if (!root || !ui->status) {
         strncpy(err, "could not create MUI objects", errsz - 1);
-        free(ui->widgets);
         free(ui);
         ui_libs_close();
         return NULL;
     }
-
-    build_groups(ui);
 
     ui->win = MUI_NewObject(MUIC_Window,
         MUIA_Window_Title,     (IPTR)"ami2ha",
@@ -500,7 +505,6 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
         strncpy(err, "could not create the window (is MUI installed?)", errsz - 1);
         if (ui->app)
             MUI_DisposeObject(ui->app);
-        free(ui->widgets);
         free(ui);
         ui_libs_close();
         return NULL;
@@ -510,7 +514,19 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
     DoMethod(ui->win, MUIM_Notify, MUIA_Window_CloseRequest, TRUE,
              (IPTR)ui->app, 2, MUIM_Application_ReturnID, ID_QUIT);
 
-    bind_controls(ui);
+    /*
+     * Fill the dashboard in now rather than before the window was made:
+     * binding the controls needs the application object. The window is
+     * not open yet, so the group can take children without the
+     * InitChange/ExitChange bracket a rebuild needs.
+     */
+    if (!build_dashboard(ui)) {
+        strncpy(err, "out of memory", errsz - 1);
+        MUI_DisposeObject(ui->app);
+        free(ui);
+        ui_libs_close();
+        return NULL;
+    }
 
     ui->editor = editor_create(ui->app, cfg, ha, ui->cfgpath);
 
