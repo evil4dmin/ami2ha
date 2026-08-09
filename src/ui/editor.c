@@ -62,6 +62,13 @@ struct a2h_editor {
      */
     a2h_widget *stash;
     int         nstash;
+
+    /*
+     * Which entity the properties box is showing. Edits are committed to
+     * this one rather than to whatever is selected now: by the time a
+     * click on another entry reaches us, the selection has already moved.
+     */
+    char shown[HA_ENTITY_ID_MAX];
 };
 
 /* MUI shows a list entry by asking this for the column text. */
@@ -668,6 +675,7 @@ void editor_show(a2h_editor *ed)
     free(ed->stash);
     ed->stash  = NULL;
     ed->nstash = 0;
+    ed->shown[0] = '\0';
 
     /* Keep a copy so Cancel can put everything back. */
     cfg_free(&ed->backup);
@@ -800,11 +808,20 @@ static void group_delete(a2h_editor *ed)
 }
 
 /* The widget behind the highlighted row, or NULL. */
+static a2h_widget *widget_for(a2h_editor *ed, const char *entity)
+{
+    int i;
+
+    for (i = 0; i < ed->cfg->nwidgets; i++)
+        if (strcmp(ed->cfg->widgets[i].entity, entity) == 0)
+            return &ed->cfg->widgets[i];
+    return NULL;
+}
+
 static a2h_widget *selected_widget(a2h_editor *ed, ed_row **rowp, LONG *posp)
 {
     LONG    active = MUIV_List_Active_Off;
     ed_row *row    = NULL;
-    int     i;
 
     get(ed->list_used, MUIA_List_Active, &active);
     if (active == MUIV_List_Active_Off)
@@ -817,10 +834,76 @@ static a2h_widget *selected_widget(a2h_editor *ed, ed_row **rowp, LONG *posp)
     if (rowp) *rowp = row;
     if (posp) *posp = active;
 
-    for (i = 0; i < ed->cfg->nwidgets; i++)
-        if (strcmp(ed->cfg->widgets[i].entity, row->entity) == 0)
-            return &ed->cfg->widgets[i];
-    return NULL;
+    return widget_for(ed, row->entity);
+}
+
+/* Where an entity sits in the dashboard list, or -1. */
+static int row_pos_of(a2h_editor *ed, const char *entity, ed_row **rowp)
+{
+    LONG n = 0, i;
+
+    get(ed->list_used, MUIA_List_Entries, &n);
+    for (i = 0; i < n; i++) {
+        ed_row *row = NULL;
+
+        DoMethod(ed->list_used, MUIM_List_GetEntry, i, (IPTR)&row);
+        if (row && strcmp(row->entity, entity) == 0) {
+            if (rowp)
+                *rowp = row;
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+/*
+ * Write the properties box back to the entity it is showing.
+ *
+ * The string gadgets notify on Return and nothing else, so a value typed
+ * and then left behind by clicking another entry was simply dropped --
+ * and since the box was immediately redrawn for the newly selected
+ * entity, it looked as though the value had reverted.
+ */
+static void commit_properties(a2h_editor *ed)
+{
+    a2h_widget *w;
+    ed_row     *row  = NULL;
+    STRPTR      text = NULL;
+    int         pos;
+
+    if (!ed->shown[0])
+        return;
+    w = widget_for(ed, ed->shown);
+    if (!w)
+        return;
+
+    get(ed->str_label, MUIA_String_Contents, &text);
+    if (text) {
+        strncpy(w->label, (const char *)text, sizeof w->label - 1);
+        w->label[sizeof w->label - 1] = '\0';
+    }
+
+    /* Min and max only mean anything for a gauge, and their gadgets are
+     * disabled otherwise; leave the other kinds' values alone. */
+    if (w->kind == W_GAUGE) {
+        LONG lo = 0, hi = 0;
+
+        get(ed->str_min, MUIA_String_Integer, &lo);
+        get(ed->str_max, MUIA_String_Integer, &hi);
+        if (hi <= lo)      /* an inverted range would divide by zero */
+            hi = lo + 1;
+        w->min = lo;
+        w->max = hi;
+        /* Showing the corrected value must not re-trigger the handler. */
+        SetAttrs(ed->str_max, MUIA_NoNotify, TRUE,
+                 MUIA_String_Integer, (IPTR)hi, TAG_DONE);
+    }
+
+    pos = row_pos_of(ed, ed->shown, &row);
+    if (row && pos >= 0) {
+        row_fill(row, ed->ha, row->entity, w->label, w->kind);
+        DoMethod(ed->list_used, MUIM_List_Redraw, pos);
+    }
 }
 
 /*
@@ -834,8 +917,17 @@ static a2h_widget *selected_widget(a2h_editor *ed, ed_row **rowp, LONG *posp)
  */
 static void show_properties(a2h_editor *ed)
 {
-    a2h_widget *w = selected_widget(ed, NULL, NULL);
+    ed_row     *row = NULL;
+    a2h_widget *w   = selected_widget(ed, &row, NULL);
     int         gauge;
+
+    /* Remember what is on show, so edits can be banked against it later. */
+    if (w && row) {
+        strncpy(ed->shown, row->entity, sizeof ed->shown - 1);
+        ed->shown[sizeof ed->shown - 1] = '\0';
+    } else {
+        ed->shown[0] = '\0';
+    }
 
     if (!w) {
         SetAttrs(ed->str_label, MUIA_NoNotify, TRUE,
@@ -882,47 +974,7 @@ static void set_kind_of_selected(a2h_editor *ed)
     show_properties(ed);   /* min/max become live for a gauge */
 }
 
-static void set_label_of_selected(a2h_editor *ed)
-{
-    ed_row     *row = NULL;
-    LONG        pos = 0;
-    a2h_widget *w   = selected_widget(ed, &row, &pos);
-    STRPTR      text = NULL;
 
-    if (!w || !row)
-        return;
-
-    get(ed->str_label, MUIA_String_Contents, &text);
-    if (!text)
-        return;
-
-    strncpy(w->label, (const char *)text, sizeof w->label - 1);
-    w->label[sizeof w->label - 1] = '\0';
-    row_fill(row, ed->ha, row->entity, w->label, w->kind);
-    DoMethod(ed->list_used, MUIM_List_Redraw, pos);
-}
-
-static void set_range_of_selected(a2h_editor *ed)
-{
-    a2h_widget *w = selected_widget(ed, NULL, NULL);
-    LONG        lo = 0, hi = 0;
-
-    if (!w)
-        return;
-
-    get(ed->str_min, MUIA_String_Integer, &lo);
-    get(ed->str_max, MUIA_String_Integer, &hi);
-
-    /* An inverted or empty range would divide by zero when drawing. */
-    if (hi <= lo)
-        hi = lo + 1;
-
-    w->min = lo;
-    w->max = hi;
-    /* Writing the corrected value back must not re-trigger this handler. */
-    SetAttrs(ed->str_max, MUIA_NoNotify, TRUE,
-             MUIA_String_Integer, (IPTR)hi, TAG_DONE);
-}
 
 static void rename_group(a2h_editor *ed)
 {
@@ -955,6 +1007,15 @@ int editor_handle(a2h_editor *ed, unsigned long id, int *relayout)
 
     if (relayout)
         *relayout = 0;
+
+    /*
+     * Whatever is in the properties box belongs to the entity it is
+     * showing, so bank it before this event moves the selection, changes
+     * the group, or rewrites the configuration. Opening the window is the
+     * exception: nothing is on show yet.
+     */
+    if (id != ID_ED_OPEN)
+        commit_properties(ed);
 
     switch (id) {
     case ID_ED_OPEN:
@@ -1011,12 +1072,10 @@ int editor_handle(a2h_editor *ed, unsigned long id, int *relayout)
         rename_group(ed);
         break;
 
+    /* Return in the label, min or max gadget. The commit above already
+     * banked it against the entity on show. */
     case ID_ED_LABEL:
-        set_label_of_selected(ed);
-        break;
-
     case ID_ED_RANGE:
-        set_range_of_selected(ed);
         break;
 
     case ID_ED_USE:
