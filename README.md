@@ -152,10 +152,22 @@ that TLS on a plain 68k machine is slow.
 
 ## ARexx
 
-ami2ha will expose an `AMI2HA` host port so other Amiga software can read
-values and issue commands, and can run an ARexx script whenever a subscribed
-entity changes. The command set is designed in
-[docs/AREXX.md](docs/AREXX.md); it is not implemented yet.
+ami2ha hosts an `AMI2HA` port so the rest of your Workbench can read values
+and issue commands:
+
+```rexx
+/* every ARexx script must start with a comment */
+OPTIONS RESULTS
+ADDRESS AMI2HA
+
+GET sensor.kitchen_temperature
+SAY 'kitchen is' RESULT
+
+ON switch.workshop_outlet
+```
+
+Arguments need no quoting — ARexx uppercases them and ami2ha folds them
+back. See [docs/AREXX.md](docs/AREXX.md) for the full command set.
 
 ## Roadmap
 
@@ -172,7 +184,7 @@ entity changes. The command set is designed in
 - [ ] Choose entities from within Home Assistant (see docs/IDEAS.md)
 - [ ] In-app dashboard editor
 - [ ] Reconnect handling and connection status UI
-- [ ] ARexx host port
+- [x] ARexx host port
 - [ ] Optional AmiSSL support
 - [ ] Installer, icons, documentation
 

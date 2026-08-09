@@ -19,6 +19,7 @@ void suite_http(void);
 void suite_ha(void);
 void suite_config(void);
 void suite_charset(void);
+void suite_rexx(void);
 
 int main(void)
 {
@@ -34,6 +35,7 @@ int main(void)
     printf("ha\n");     suite_ha();
     printf("config\n"); suite_config();
     printf("charset\n");suite_charset();
+    printf("rexx\n");   suite_rexx();
 
     printf("\n%d checks, %d failures\n", tt_checks, tt_failures);
     return tt_failures ? 1 : 0;

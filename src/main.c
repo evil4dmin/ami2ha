@@ -18,6 +18,7 @@
 #include "ami2ha/cfgfile.h"
 #include "ami2ha/ha.h"
 #include "ami2ha/net.h"
+#include "ami2ha/rexx.h"
 #include "ami2ha/ui.h"
 
 #include <stdio.h>
@@ -62,6 +63,7 @@ struct app {
     ha_client   ha;
     a2h_socket  sock;
     a2h_ui     *ui;      /* NULL in command line mode */
+    a2h_rexx   *rexx;    /* NULL unless the host port is open */
     int         ready;
     int         failed;
     int         watching;
@@ -76,7 +78,7 @@ static void cb_ready(ha_client *c, void *user)
     a->ready = 1;
     if (a->ui) {
         char msg[96];
-        sprintf(msg, "Connected -- Home Assistant %s, %lu entities",
+        sprintf(msg, "HA %s, %lu entities",
                 c->version[0] ? c->version : "?",
                 (unsigned long)ha_store_count(&c->store));
         ui_set_status(a->ui, msg);
@@ -166,17 +168,26 @@ static int pump(struct app *a, long timeout_ms)
      * stack, and the program is single-threaded. */
     static unsigned char buf[2048];
     unsigned long sigs;
+    unsigned long rexxsig = rexx_sigmask(a->rexx);
     int           readable = 0, writable = 0;
     int           want_write;
 
     want_write = a->sock.connecting || ha_client_out(&a->ha)->len > 0;
 
-    sigs = net_wait(&a->sock, want_write, SIGBREAKF_CTRL_C, timeout_ms,
-                    &readable, &writable);
+    /* One wait covers the socket, Ctrl-C and the ARexx port together. */
+    sigs = net_wait(&a->sock, want_write, SIGBREAKF_CTRL_C | rexxsig,
+                    timeout_ms, &readable, &writable);
 
     if (sigs & SIGBREAKF_CTRL_C) {
         printf("\n*** break\n");
         return 0;
+    }
+
+    if (rexxsig && (sigs & rexxsig)) {
+        if (!rexx_poll(a->rexx, &a->ha))
+            return 0;              /* a script asked us to quit */
+        if (!flush_output(a))
+            return 0;              /* its commands may have queued output */
     }
 
     if (a->sock.connecting) {
@@ -433,6 +444,17 @@ int main(int argc, char **argv)
     if (rc == NET_OK)
         ha_client_begin(&app.ha);
 
+    /* The ARexx port only makes sense while we are running: a one-shot
+     * command would publish a port and remove it again before any script
+     * could address it. */
+    if (args.gui || args.watch) {
+        app.rexx = rexx_open("AMI2HA");
+        if (app.rexx)
+            printf("ami2ha: ARexx port %s\n", rexx_portname(app.rexx));
+        else
+            printf("ami2ha: could not create an ARexx port\n");
+    }
+
     /* --- GUI mode owns the event loop from here --- */
     if (args.gui) {
         char uierr[128];
@@ -447,6 +469,8 @@ int main(int argc, char **argv)
         }
 
         app.ui = ui_create(dash, &app.ha, &app.sock, uierr, sizeof uierr);
+        if (app.ui)
+            ui_set_rexx(app.ui, app.rexx);
         if (!app.ui) {
             printf("ami2ha: %s\n", uierr);
             rc_exit = RETURN_FAIL;
@@ -460,7 +484,15 @@ int main(int argc, char **argv)
     }
 
     /* --- run until ready, or until the timeout expires --- */
-    deadline_ms = args.timeout ? *args.timeout * 1000L : 20000L;
+    /*
+     * Without a dashboard we fetch every entity, which on a large
+     * installation is close to a megabyte to receive and parse. That is
+     * comfortably slower than the 20s a filtered start needs.
+     */
+    if (args.timeout)
+        deadline_ms = *args.timeout * 1000L;
+    else
+        deadline_ms = (nfilter > 0) ? 20000L : 120000L;
     while (!app.ready && !app.failed && deadline_ms > 0) {
         if (!pump(&app, 250))
             goto cleanup;
@@ -545,6 +577,8 @@ int main(int argc, char **argv)
     }
 
 cleanup:
+    rexx_close(app.rexx);
+    app.rexx = NULL;
     free_dash(&dash);
     net_disconnect(&app.sock);
     ha_client_free(&app.ha);

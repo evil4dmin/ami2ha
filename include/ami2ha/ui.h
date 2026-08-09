@@ -11,6 +11,7 @@
 #include "ami2ha/config.h"
 #include "ami2ha/ha.h"
 #include "ami2ha/net.h"
+#include "ami2ha/rexx.h"
 
 typedef struct a2h_ui a2h_ui;
 
@@ -22,6 +23,9 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
                   char *err, size_t errsz);
 
 void ui_dispose(a2h_ui *ui);
+
+/* Serve this ARexx port from the GUI event loop. Borrowed, not owned. */
+void ui_set_rexx(a2h_ui *ui, a2h_rexx *rexx);
 
 /*
  * Run the event loop until the user quits or the connection dies. Returns

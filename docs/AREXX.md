@@ -1,7 +1,7 @@
 # ARexx interface
 
-> **Design document.** This describes the intended interface. None of it is
-> implemented yet — see the roadmap in the README.
+> Implemented and tested on AmigaOS 3.2. `SUBSCRIBE`/`UNSUBSCRIBE` are the
+> exception: they are still a design sketch, and are marked as such below.
 
 ami2ha hosts an ARexx port named `AMI2HA`. If more than one copy is running,
 subsequent instances take `AMI2HA.1`, `AMI2HA.2` and so on, following the
@@ -13,27 +13,49 @@ Two directions are supported:
   `AMI2HA` to read values and control entities.
 - **Outbound** — ami2ha runs an ARexx script when a subscribed entity
   changes, letting you push values into any other application that has a
-  port of its own.
+  port of its own. *(designed, not implemented — see Notifications below)*
 
 ## Conventions
 
 Results are returned in `RESULT`, so scripts must `OPTIONS RESULTS`. Commands
-set `RC` to 0 on success and non-zero on failure, with a human-readable
-description in `AMI2HA.LASTERROR`.
+set `RC` to 0 on success, 5 when the request was understood but could not be
+answered (an unknown entity, say), and 10 for a malformed command.
 
-Where a command can return several values, it accepts a `STEM` argument and
-writes a set of stem variables instead of a single result. Entity IDs are
-always the full Home Assistant form, e.g. `light.kitchen`.
+After a failure, `LASTERROR` returns the reason:
+
+```rexx
+GET sensor.nope
+IF RC ~= 0 THEN DO
+    LASTERROR
+    SAY 'failed:' RESULT        /* -> no such entity: sensor.nope */
+END
+```
+
+**Arguments do not need quoting.** ARexx uppercases unquoted words in a
+command clause, so `GET switch.kitchen` arrives as `GET SWITCH.KITCHEN`.
+Since Home Assistant ids, domains, services and attribute names are always
+lower case, ami2ha folds them back. The one thing you *must* quote is the
+JSON passed to `DATA`, whose keys are case-sensitive:
+
+```rexx
+CALL light turn_on ENTITY light.kitchen DATA '{"brightness":200}'
+```
+
+Remember too that every ARexx script must begin with a `/* comment */`, or
+the interpreter will not recognise it as one.
+
+Commands that return several values put one per line in `RESULT`; `STEM` is
+not implemented. Entity IDs are always the full Home Assistant form, e.g.
+`light.kitchen`.
 
 ## Commands
 
 ### State access
 
 ```
-GET <entity-id> [STEM <stem>]
+GET <entity-id>
 ```
-Returns the current state as a string. With `STEM`, writes `<stem>STATE`,
-`<stem>NAME`, `<stem>UNIT`, `<stem>CLASS` and `<stem>CHANGED` instead.
+Returns the current state as a string.
 
 ```
 ATTR <entity-id> <attribute>
@@ -41,9 +63,9 @@ ATTR <entity-id> <attribute>
 Returns one attribute value, e.g. `ATTR light.kitchen brightness`.
 
 ```
-LIST [DOMAIN <domain>] [STEM <stem>]
+LIST [DOMAIN <domain>]
 ```
-Lists known entity IDs. Writes `<stem>COUNT` and `<stem>.1` … `<stem>.n`.
+Lists known entity IDs, one per line.
 
 ### Control
 
@@ -64,7 +86,7 @@ call, so anything the REST or WebSocket API accepts is reachable:
 CALL light turn_on ENTITY light.kitchen DATA '{"brightness":128}'
 ```
 
-### Notifications
+### Notifications (not implemented yet)
 
 ```
 SUBSCRIBE <entity-id> <script> [ARG <text>]
@@ -84,32 +106,49 @@ ADDRESS 'SOMEEDITOR' 'INSERT TEXT "Kitchen now' newstate 'degrees"'
 ### Session and control
 
 ```
-CONNECT [<url>] [TOKEN <token>]   open a connection, optionally overriding prefs
-DISCONNECT                        close it
-STATUS [STEM <stem>]              connection state, entity count, server version
-REFRESH                           re-fetch all states
-VERSION                           ami2ha version string
-QUIT [FORCE]                      exit the application
+STATUS      connection state, server version and entity count, space separated
+COUNT       number of entities held
+LASTERROR   reason for the most recent failure
+VERSION     ami2ha version string
+QUIT        exit the application
+```
+
+`CONNECT`, `DISCONNECT` and `REFRESH` are not implemented.
+
+## The port name
+
+The port is `AMI2HA`. A second instance takes `AMI2HA.1`, a third `AMI2HA.2`
+and so on, so `SHOW('P')` is worth checking if you run more than one:
+
+```
+ports: WORKBENCH DEFICONS REXX AREXX ... AMI2HA AMI2HA.1 ...
 ```
 
 ## Example
 
+This is a real session, run on AmigaOS 3.2 against a live Home Assistant:
+
 ```rexx
-/* Turn on the desk lamp if the study is below 20 degrees. */
+/* ami2ha: full control round trip from ARexx */
 OPTIONS RESULTS
 ADDRESS AMI2HA
 
-GET sensor.study_temperature
-IF RC ~= 0 THEN DO
-    SAY 'lookup failed:' AMI2HA.LASTERROR
-    EXIT 10
-END
+GET switch.workshop_outlet
+SAY 'before  -> ' || RESULT          /* before  -> off */
 
-IF RESULT < 20 THEN DO
-    CALL light turn_on ENTITY light.desk_lamp DATA '{"brightness":200}'
-    SAY 'lamp on, study at' RESULT 'degrees'
-END
+ON switch.workshop_outlet
+SAY 'ON  rc=' || RC                  /* ON  rc=0       */
+
+GET switch.workshop_outlet
+SAY 'during  -> ' || RESULT          /* during  -> on  */
+
+OFF switch.workshop_outlet
+GET switch.workshop_outlet
+SAY 'after   -> ' || RESULT          /* after   -> off */
 ```
+
+The state read back after switching comes from the WebSocket push, not from
+a re-query: ami2ha updates its store as Home Assistant reports the change.
 
 ## Open questions
 
@@ -119,5 +158,3 @@ END
 - Whether to expose a `WAIT <entity-id> [TIMEOUT <secs>]` command that blocks
   until a change arrives. Convenient for scripts, but it holds an ARexx
   message open, which needs care in the event loop.
-
-Feedback on both is welcome.

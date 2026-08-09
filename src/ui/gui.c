@@ -87,6 +87,8 @@ struct a2h_ui {
     ui_widget  *widgets;
     int         nwidgets;
 
+    a2h_rexx   *rexx;   /* borrowed; may be NULL */
+
     int         quit;
 };
 
@@ -400,6 +402,12 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
     return ui;
 }
 
+void ui_set_rexx(a2h_ui *ui, a2h_rexx *rexx)
+{
+    if (ui)
+        ui->rexx = rexx;
+}
+
 void ui_dispose(a2h_ui *ui)
 {
     if (!ui)
@@ -616,16 +624,24 @@ int ui_run(a2h_ui *ui)
             int   readable = 0, writable = 0;
             int   want_write = ui->sock->connecting ||
                                ha_client_out(ui->ha)->len > 0;
+            ULONG rexxsig = rexx_sigmask(ui->rexx);
             ULONG fired;
 
-            /* One sleep for MUI, the socket and Ctrl-C. WaitSelect takes
-             * the Exec mask MUI just gave us, so nothing polls. */
+            /* One sleep for MUI, the socket, Ctrl-C and the ARexx port.
+             * WaitSelect takes the Exec mask MUI just gave us, so nothing
+             * polls. */
             fired = net_wait(ui->sock, want_write,
-                             sigs | SIGBREAKF_CTRL_C, -1,
+                             sigs | SIGBREAKF_CTRL_C | rexxsig, -1,
                              &readable, &writable);
 
             if (fired & SIGBREAKF_CTRL_C)
                 break;
+
+            if (rexxsig && (fired & rexxsig)) {
+                if (!rexx_poll(ui->rexx, ui->ha))
+                    break;
+                ui_refresh_all(ui);
+            }
 
             /* Hand MUI back only the signals it asked about. */
             sigs = fired & sigs;
