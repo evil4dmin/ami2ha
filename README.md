@@ -104,6 +104,17 @@ ami2ha homeassistant.local TOKENFILE=S:ha.token WATCH
 `TOKEN`: a token on the command line ends up in your shell history and is
 visible in the task list.
 
+### Or start it from Workbench
+
+```
+ami2ha CONFIG=S:ami2ha.cfg TOKENFILE=S:ha.token WRITEICON
+```
+
+writes an icon whose tool types carry those settings, so afterwards the
+program can simply be double-clicked -- no Shell involved. Tool types read
+on a Workbench start are `CONFIG`, `HOST`, `PORT` and `TOKENFILE`, and can
+be edited in Workbench under Icons -> Information.
+
 ## The dashboard
 
 Widgets are bound to entities explicitly, one per line, so a dashboard is a

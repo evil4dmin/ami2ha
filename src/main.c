@@ -14,6 +14,9 @@
 #include "ami2ha/compat.h"
 
 #include <proto/intuition.h>
+#include <proto/icon.h>
+#include <workbench/startup.h>
+#include <workbench/workbench.h>
 
 #include "ami2ha/cfgfile.h"
 #include "ami2ha/ha.h"
@@ -39,7 +42,7 @@ size_t __stack = 32768;
 
 #define TEMPLATE                                                        \
     "HOST,PORT/N,TOKEN/K,TOKENFILE/K,CONFIG/K,WRITECONFIG/K,"          \
-    "GUI/S,LIST/S,WATCH/S,GET/K,TOGGLE/K,ON/K,OFF/K,DOMAIN/K,TIMEOUT/N/K"
+    "GUI/S,LIST/S,WATCH/S,WRITEICON/S,GET/K,TOGGLE/K,ON/K,OFF/K,DOMAIN/K,TIMEOUT/N/K"
 
 struct cli_args {
     STRPTR host;
@@ -48,9 +51,15 @@ struct cli_args {
     STRPTR tokenfile;
     STRPTR config;
     STRPTR writeconfig;
+    /*
+     * The order of these fields must match TEMPLATE exactly: ReadArgs fills
+     * them positionally, so a field in the wrong place silently receives a
+     * different option's value.
+     */
     LONG   gui;
     LONG   list;
     LONG   watch;
+    LONG   writeicon;
     STRPTR get;
     STRPTR toggle;
     STRPTR on;
@@ -270,13 +279,139 @@ static void free_dash(a2h_config **p)
     }
 }
 
+/*
+ * Started from Workbench: settings come from the icon's tool types instead
+ * of a command line, which is how an Amiga program is normally configured
+ * when it has no Shell to be told things by.
+ *
+ *   CONFIG=Work:a2h/label.cfg
+ *   HOST=192.168.1.100
+ *   PORT=8123
+ *   TOKENFILE=Work:a2h/ha.token
+ *
+ * Returns 0 if the icon could not be read, in which case there is nothing
+ * to go on and the program has no console to complain to.
+ */
+struct Library *IconBase = NULL;
+
+static int read_tooltypes(struct WBStartup *wbs, struct cli_args *args,
+                          char *cfgbuf, char *hostbuf, char *tokbuf,
+                          LONG *portbuf)
+{
+    struct DiskObject *dobj;
+    BPTR               olddir = (BPTR)-1;
+    UBYTE             *v;
+    int                ok = 0;
+
+    if (!wbs || wbs->sm_NumArgs < 1 || !wbs->sm_ArgList)
+        return 0;
+
+    IconBase = OpenLibrary("icon.library", 36);
+    if (!IconBase)
+        return 0;
+
+    /* The icon lives beside the program, so look from its directory. */
+    if (wbs->sm_ArgList[0].wa_Lock)
+        olddir = CurrentDir(wbs->sm_ArgList[0].wa_Lock);
+
+    dobj = GetDiskObject((STRPTR)wbs->sm_ArgList[0].wa_Name);
+    if (dobj) {
+        if ((v = FindToolType((CONST_STRPTR *)dobj->do_ToolTypes,
+                              (CONST_STRPTR)"CONFIG")) != NULL) {
+            strncpy(cfgbuf, (const char *)v, CFG_PATH_MAX - 1);
+            args->config = (STRPTR)cfgbuf;
+        }
+        if ((v = FindToolType((CONST_STRPTR *)dobj->do_ToolTypes,
+                              (CONST_STRPTR)"HOST")) != NULL) {
+            strncpy(hostbuf, (const char *)v, HA_HOST_MAX - 1);
+            args->host = (STRPTR)hostbuf;
+        }
+        if ((v = FindToolType((CONST_STRPTR *)dobj->do_ToolTypes,
+                              (CONST_STRPTR)"TOKENFILE")) != NULL) {
+            strncpy(tokbuf, (const char *)v, CFG_PATH_MAX - 1);
+            args->tokenfile = (STRPTR)tokbuf;
+        }
+        if ((v = FindToolType((CONST_STRPTR *)dobj->do_ToolTypes,
+                              (CONST_STRPTR)"PORT")) != NULL) {
+            *portbuf = atol((const char *)v);
+            args->port = portbuf;
+        }
+
+        FreeDiskObject(dobj);
+        ok = 1;
+    }
+
+    if (olddir != (BPTR)-1)
+        CurrentDir(olddir);
+
+    CloseLibrary(IconBase);
+    IconBase = NULL;
+    return ok;
+}
+
+/*
+ * Write an icon next to the program whose tool types carry the settings it
+ * was just given, so it can be started by double-clicking afterwards.
+ */
+static int write_icon(const char *progname, const struct cli_args *a)
+{
+    struct DiskObject *dobj;
+    char  *tt[5];
+    char   buf[3][CFG_PATH_MAX + 16];
+    int    n = 0, ok = 0;
+
+    IconBase = OpenLibrary("icon.library", 36);
+    if (!IconBase) {
+        printf("ami2ha: cannot open icon.library\n");
+        return 0;
+    }
+
+    if (a->config) { sprintf(buf[n], "CONFIG=%.200s", (char *)a->config);
+                     tt[n] = buf[n]; n++; }
+    if (a->host)   { sprintf(buf[n], "HOST=%.100s", (char *)a->host);
+                     tt[n] = buf[n]; n++; }
+    if (a->tokenfile) { sprintf(buf[n], "TOKENFILE=%.200s", (char *)a->tokenfile);
+                        tt[n] = buf[n]; n++; }
+    tt[n] = NULL;
+
+    dobj = GetDiskObject((STRPTR)progname);      /* keep an existing icon */
+    if (!dobj)
+        dobj = GetDefDiskObject(WBTOOL);         /* otherwise a default one */
+
+    if (dobj) {
+        CONST_STRPTR *saved = (CONST_STRPTR *)dobj->do_ToolTypes;
+
+        dobj->do_ToolTypes = (STRPTR *)tt;
+        dobj->do_CurrentX  = NO_ICON_POSITION;
+        dobj->do_CurrentY  = NO_ICON_POSITION;
+
+        if (PutDiskObject((STRPTR)progname, dobj)) {
+            printf("ami2ha: wrote %s.info -- you can double-click it now\n",
+                   progname);
+            ok = 1;
+        } else {
+            printf("ami2ha: could not write %s.info\n", progname);
+        }
+
+        /* Put the original array back before freeing, or icon.library
+         * would try to free our stack buffers. */
+        dobj->do_ToolTypes = (STRPTR *)saved;
+        FreeDiskObject(dobj);
+    }
+
+    CloseLibrary(IconBase);
+    IconBase = NULL;
+    return ok;
+}
+
 static void usage(void)
 {
     printf(
       "ami2ha -- Home Assistant client\n\n"
       "  ami2ha <host> [PORT=n] TOKENFILE=<file> LIST\n"
       "  ami2ha <host> TOKENFILE=<file> WRITECONFIG=<file>\n"
-      "  ami2ha CONFIG=<file> GUI\n\n"
+      "  ami2ha CONFIG=<file> GUI\n"
+      "  ami2ha CONFIG=<file> WRITEICON     make it double-clickable\n\n"
       "Template:\n  " TEMPLATE "\n\n"
       "Keep the access token in a file rather than on the command line.\n");
 }
@@ -296,7 +431,7 @@ static unsigned long make_seed(void)
 int main(int argc, char **argv)
 {
     struct cli_args args;
-    struct RDArgs  *rda;
+    struct RDArgs  *rda = NULL;
     struct RDArgs  *rdargs = NULL;
     struct app      app;
     ha_config       cfg;
@@ -310,6 +445,11 @@ int main(int argc, char **argv)
     long            deadline_ms;
     const char     *filter_ids[CFG_MAX_WIDGETS];
     int             nfilter = 0;
+    int             from_workbench = 0;
+    static char     wb_config[CFG_PATH_MAX];
+    static char     wb_host[HA_HOST_MAX];
+    static char     wb_tokenfile[CFG_PATH_MAX];
+    static LONG     wb_port;
     int             rc_exit = RETURN_OK;
     int             rc;
 
@@ -329,13 +469,18 @@ int main(int argc, char **argv)
      * be. argc is 0 when started from Workbench, which also has no command
      * line to parse.
      */
-    A2H_UNUSED(argv);
     if (argc == 0) {
-        /* Started from Workbench: there is no console to print to, and
-         * nothing sensible to do without a configuration. */
-        return RETURN_WARN;
-    }
-    if (argc < 2) {
+        /*
+         * Started from Workbench. There is no command line and no console,
+         * so take the settings from the icon's tool types and show the
+         * dashboard -- that is the only thing worth doing without a Shell.
+         */
+        if (!read_tooltypes((struct WBStartup *)argv, &args,
+                            wb_config, wb_host, wb_tokenfile, &wb_port))
+            return RETURN_WARN;
+        args.gui = TRUE;
+        from_workbench = 1;
+    } else if (argc < 2) {
         usage();
         return RETURN_WARN;
     }
@@ -344,26 +489,28 @@ int main(int argc, char **argv)
      * RDAF_NOPROMPT is kept as a second line of defence: it stops ReadArgs
      * sourcing arguments from stdin even if a command line slips through.
      */
-    rdargs = (struct RDArgs *)AllocDosObject(DOS_RDARGS, NULL);
-    if (!rdargs) {
-        printf("ami2ha: out of memory\n");
-        return RETURN_FAIL;
-    }
-    rdargs->RDA_Flags |= RDAF_NOPROMPT;
+    if (!from_workbench) {
+        rdargs = (struct RDArgs *)AllocDosObject(DOS_RDARGS, NULL);
+        if (!rdargs) {
+            printf("ami2ha: out of memory\n");
+            return RETURN_FAIL;
+        }
+        rdargs->RDA_Flags |= RDAF_NOPROMPT;
 
-    rda = ReadArgs((STRPTR)TEMPLATE, (LONG *)&args, rdargs);
-    if (!rda) {
-        usage();
-        FreeDosObject(DOS_RDARGS, rdargs);
-        return RETURN_ERROR;
+        rda = ReadArgs((STRPTR)TEMPLATE, (LONG *)&args, rdargs);
+        if (!rda) {
+            usage();
+            if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
+            return RETURN_ERROR;
+        }
     }
 
     /* --- configuration: the file supplies defaults, the command line wins --- */
     dash = (a2h_config *)malloc(sizeof *dash);
     if (!dash) {
         printf("ami2ha: out of memory\n");
-        FreeArgs(rda);
-        FreeDosObject(DOS_RDARGS, rdargs);
+        if (rda) FreeArgs(rda);
+        if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
         return RETURN_FAIL;
     }
     cfg_init(dash);
@@ -372,8 +519,8 @@ int main(int argc, char **argv)
         if (!cfg_load_file(dash, (const char *)args.config, cfgerr, sizeof cfgerr)) {
             printf("ami2ha: %s\n", cfgerr);
             free_dash(&dash);
-            FreeArgs(rda);
-            FreeDosObject(DOS_RDARGS, rdargs);
+            if (rda) FreeArgs(rda);
+            if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
             return RETURN_ERROR;
         }
     }
@@ -388,8 +535,8 @@ int main(int argc, char **argv)
     else {
         printf("ami2ha: need a HOST, either as an argument or in a CONFIG file\n");
         free_dash(&dash);
-        FreeArgs(rda);
-        FreeDosObject(DOS_RDARGS, rdargs);
+        if (rda) FreeArgs(rda);
+        if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
         return RETURN_ERROR;
     }
 
@@ -406,8 +553,8 @@ int main(int argc, char **argv)
             if (!cfg_read_token_file(tf, token, sizeof token)) {
                 printf("ami2ha: cannot read token from %s\n", tf);
                 free_dash(&dash);
-                FreeArgs(rda);
-                FreeDosObject(DOS_RDARGS, rdargs);
+                if (rda) FreeArgs(rda);
+                if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
                 return RETURN_ERROR;
             }
         } else if (dash->token[0]) {
@@ -417,8 +564,8 @@ int main(int argc, char **argv)
                    "  Create a long-lived access token in Home Assistant under\n"
                    "  your profile, then keep it in a file: TOKENFILE=S:ha.token\n");
             free_dash(&dash);
-            FreeArgs(rda);
-            FreeDosObject(DOS_RDARGS, rdargs);
+            if (rda) FreeArgs(rda);
+            if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
             return RETURN_ERROR;
         }
     }
@@ -436,12 +583,20 @@ int main(int argc, char **argv)
     cb.user           = &app;
 
     /* --- bring up the stack --- */
+    if (args.writeicon) {
+        write_icon(argv && argv[0] ? argv[0] : "ami2ha", &args);
+        free_dash(&dash);
+        if (rda) FreeArgs(rda);
+        if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
+        return RETURN_OK;
+    }
+
     rc = net_lib_open();
     if (rc != NET_OK) {
         printf("ami2ha: %s\n", net_error_text(rc));
         free_dash(&dash);
-        FreeArgs(rda);
-        FreeDosObject(DOS_RDARGS, rdargs);
+        if (rda) FreeArgs(rda);
+        if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
         return RETURN_FAIL;
     }
 
@@ -449,8 +604,8 @@ int main(int argc, char **argv)
         printf("ami2ha: out of memory\n");
         free_dash(&dash);
         net_lib_close();
-        FreeArgs(rda);
-        FreeDosObject(DOS_RDARGS, rdargs);
+        if (rda) FreeArgs(rda);
+        if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
         return RETURN_FAIL;
     }
 
@@ -678,7 +833,9 @@ cleanup:
     net_disconnect(&app.sock);
     ha_client_free(&app.ha);
     net_lib_close();
-    FreeArgs(rda);
-    FreeDosObject(DOS_RDARGS, rdargs);
+    if (rda)
+        FreeArgs(rda);
+    if (rdargs)
+        FreeDosObject(DOS_RDARGS, rdargs);
     return rc_exit;
 }
