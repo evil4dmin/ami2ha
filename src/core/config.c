@@ -666,3 +666,95 @@ int cfg_generate(a2h_buf *out, const ha_store *store, const a2h_config *base)
 
     return !out->failed;
 }
+
+/* ------------------------------------------------------------------ *
+ * Serialisation
+ * ------------------------------------------------------------------ */
+
+/*
+ * Write a value as a quoted string. The parser has no escape syntax inside
+ * quotes, so an embedded double quote would produce a file it could not
+ * read back; those become single quotes rather than corrupting the file.
+ */
+static void write_quoted(a2h_buf *out, const char *s)
+{
+    buf_append_byte(out, '"');
+    for (; *s; s++)
+        buf_append_byte(out, (unsigned char)(*s == '"' ? '\'' : *s));
+    buf_append_byte(out, '"');
+}
+
+int cfg_write(const a2h_config *cfg, a2h_buf *out)
+{
+    int g, i;
+
+    buf_append_str(out,
+        "# ami2ha dashboard\n"
+        "#\n"
+        "# Written by ami2ha. Editing by hand is fine, but saving from the\n"
+        "# settings window regenerates this file and will not keep comments.\n"
+        "\n");
+
+    if (cfg->host[0])
+        buf_printf(out, "host       %s\n", cfg->host);
+    if (cfg->port && cfg->port != 8123)
+        buf_printf(out, "port       %d\n", cfg->port);
+    if (cfg->tokenfile[0])
+        buf_printf(out, "tokenfile  %s\n", cfg->tokenfile);
+    /* Preserved only if it was already in the file; TOKENFILE is preferred. */
+    if (cfg->token[0])
+        buf_printf(out, "token      %s\n", cfg->token);
+    if (cfg->label[0])
+        buf_printf(out, "label      %s\n", cfg->label);
+    if (cfg->columns != 1)
+        buf_printf(out, "columns    %d\n", cfg->columns);
+    if (cfg->refresh_secs != 60)
+        buf_printf(out, "refresh    %d\n", cfg->refresh_secs);
+
+    for (g = 0; g < cfg->ngroups; g++) {
+        const a2h_group *grp = &cfg->groups[g];
+
+        buf_append_str(out, "\ngroup ");
+        write_quoted(out, grp->title);
+        buf_append_byte(out, '\n');
+
+        for (i = grp->first_widget;
+             i < grp->first_widget + grp->nwidgets && i < cfg->nwidgets; i++) {
+            const a2h_widget *w = &cfg->widgets[i];
+
+            buf_printf(out, "    %-6s ", cfg_widget_kind_name(w->kind));
+
+            if (w->kind == W_TEXT) {
+                write_quoted(out, w->label);
+                buf_append_byte(out, '\n');
+                continue;
+            }
+
+            /* A button leads with its service; everything else the entity. */
+            buf_append_str(out, w->kind == W_BUTTON ? w->service : w->entity);
+
+            if (w->kind == W_BUTTON && w->entity[0]) {
+                buf_append_str(out, " entity ");
+                buf_append_str(out, w->entity);
+            }
+
+            buf_append_str(out, " label ");
+            write_quoted(out, w->label);
+
+            if (w->kind == W_GAUGE)
+                buf_printf(out, " min %ld max %ld", w->min, w->max);
+            if (w->decimals != 1)
+                buf_printf(out, " decimals %d", w->decimals);
+            if (w->kind == W_BUTTON && w->data[0]) {
+                buf_append_str(out, " data ");
+                buf_append_str(out, w->data);
+            }
+
+            buf_append_byte(out, '\n');
+        }
+
+        buf_append_str(out, "end\n");
+    }
+
+    return !out->failed;
+}

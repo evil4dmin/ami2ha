@@ -120,6 +120,17 @@ int cfg_parse(a2h_config *cfg, const char *text, size_t len,
               char *err, size_t errsz);
 
 /*
+ * Serialise a configuration back to the dashboard format, so the editor can
+ * save what the user arranged. Parsing the result must reproduce the same
+ * configuration.
+ *
+ * Note that this regenerates the file: comments and hand-made layout are
+ * not preserved, because there is nothing in the parsed form to reconstruct
+ * them from.
+ */
+int cfg_write(const a2h_config *cfg, a2h_buf *out);
+
+/*
  * Append a widget, inferring its kind from the entity's domain. Used when
  * the dashboard is discovered from Home Assistant rather than written out.
  * Returns 0 if the cap or memory is reached.

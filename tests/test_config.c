@@ -381,6 +381,141 @@ static void test_generate_empty_store(void)
     ha_store_free(&store);
 }
 
+/* Compare two configurations field by field, so a round trip is provable. */
+static void expect_same(const a2h_config *a, const a2h_config *b)
+{
+    int i;
+
+    CHECK_STR(a->host, b->host);
+    CHECK_INT(a->port, b->port);
+    CHECK_STR(a->tokenfile, b->tokenfile);
+    CHECK_STR(a->label, b->label);
+    CHECK_INT(a->columns, b->columns);
+    CHECK_INT(a->refresh_secs, b->refresh_secs);
+    CHECK_INT(a->ngroups, b->ngroups);
+    CHECK_INT(a->nwidgets, b->nwidgets);
+
+    for (i = 0; i < a->ngroups && i < b->ngroups; i++) {
+        CHECK_STR(a->groups[i].title, b->groups[i].title);
+        CHECK_INT(a->groups[i].nwidgets, b->groups[i].nwidgets);
+        CHECK_INT(a->groups[i].first_widget, b->groups[i].first_widget);
+    }
+    for (i = 0; i < a->nwidgets && i < b->nwidgets; i++) {
+        CHECK_INT(a->widgets[i].kind, b->widgets[i].kind);
+        CHECK_STR(a->widgets[i].entity, b->widgets[i].entity);
+        CHECK_STR(a->widgets[i].label, b->widgets[i].label);
+        CHECK_STR(a->widgets[i].service, b->widgets[i].service);
+        CHECK_STR(a->widgets[i].data, b->widgets[i].data);
+        CHECK_INT(a->widgets[i].min, b->widgets[i].min);
+        CHECK_INT(a->widgets[i].max, b->widgets[i].max);
+        CHECK_INT(a->widgets[i].decimals, b->widgets[i].decimals);
+        CHECK_INT(a->widgets[i].group, b->widgets[i].group);
+    }
+}
+
+static void test_write_roundtrip(void)
+{
+    /*
+     * The settings window will save through cfg_write, so whatever the user
+     * arranged has to survive being written and read back exactly.
+     */
+    a2h_config cfg, back;
+    a2h_buf    out;
+    char       err[CFG_ERR_MAX];
+    static const char *doc =
+        "host      ha.local\n"
+        "port      8124\n"
+        "tokenfile S:ha.token\n"
+        "label     amiga\n"
+        "columns   2\n"
+        "refresh   30\n"
+        "group \"Wohnzimmer\"\n"
+        "    sensor sensor.temp label \"Temperatur\"\n"
+        "    gauge  sensor.co2 label \"CO2\" min 400 max 2000\n"
+        "    toggle light.wz label \"Licht\" \n"
+        "    sensor sensor.hum label \"Feuchte\" decimals 0\n"
+        "end\n"
+        "group \"Szenen\"\n"
+        "    button scene.turn_on entity scene.nacht label \"Gute Nacht\"\n"
+        "    button light.turn_on entity light.wz label \"Hell\" "
+        "data {\"brightness\":255}\n"
+        "    text   \"Ein Klick\"\n"
+        "end\n";
+
+    CHECK(cfg_parse(&cfg, doc, strlen(doc), err, sizeof err));
+
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+
+    CHECK(cfg_parse(&back, (const char *)out.data, out.len, err, sizeof err));
+    if (err[0])
+        printf("    (written file failed to parse: %s)\n", err);
+
+    expect_same(&cfg, &back);
+
+    /* Writing the result again must produce identical bytes. */
+    {
+        a2h_buf again;
+        buf_init(&again);
+        CHECK(cfg_write(&back, &again));
+        CHECK_INT(again.len, out.len);
+        CHECK(memcmp(again.data, out.data, out.len) == 0);
+        buf_free(&again);
+    }
+
+    buf_free(&out);
+    cfg_free(&cfg);
+    cfg_free(&back);
+}
+
+static void test_write_survives_awkward_text(void)
+{
+    a2h_config cfg, back;
+    a2h_buf    out;
+    char       err[CFG_ERR_MAX];
+    static const char *doc =
+        "group \"K\xFC" "che & Flur\"\n"
+        "    sensor sensor.a label \"Temp \xB0" "C draussen\"\n"
+        "end\n";
+
+    CHECK(cfg_parse(&cfg, doc, strlen(doc), err, sizeof err));
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(cfg_parse(&back, (const char *)out.data, out.len, err, sizeof err));
+
+    /* Latin-1 and spaces must come back unharmed. */
+    CHECK_INT((unsigned char)back.groups[0].title[1], 0xFC);
+    CHECK_STR(back.groups[0].title, cfg.groups[0].title);
+    CHECK_STR(back.widgets[0].label, cfg.widgets[0].label);
+
+    buf_free(&out);
+    cfg_free(&cfg);
+    cfg_free(&back);
+}
+
+static void test_write_quotes_do_not_break_the_file(void)
+{
+    /* A label typed with a quote in it must not produce an unreadable file. */
+    a2h_config cfg, back;
+    a2h_buf    out;
+    char       err[CFG_ERR_MAX];
+
+    cfg_init(&cfg);
+    strcpy(cfg.host, "ha.local");
+    CHECK(cfg_add_discovered(&cfg, "sensor.a", "G"));
+    strcpy(cfg.widgets[0].label, "he said \"hi\"");
+
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(cfg_parse(&back, (const char *)out.data, out.len, err, sizeof err));
+    CHECK_INT(back.nwidgets, 1);
+    CHECK(strstr(back.widgets[0].label, "hi") != NULL);
+
+    buf_free(&out);
+    cfg_free(&cfg);
+    cfg_free(&back);
+}
+
 void suite_config(void)
 {
     RUN(test_globals);
@@ -397,4 +532,7 @@ void suite_config(void)
     RUN(test_long_values_truncate);
     RUN(test_generate_roundtrip);
     RUN(test_generate_empty_store);
+    RUN(test_write_roundtrip);
+    RUN(test_write_survives_awkward_text);
+    RUN(test_write_quotes_do_not_break_the_file);
 }
