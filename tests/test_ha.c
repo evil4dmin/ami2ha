@@ -443,6 +443,91 @@ static void test_reset_allows_reconnect(void)
     ha_client_free(&c);
 }
 
+/*
+ * A dropped connection and a refused token both end in HA_ST_FAILED, but
+ * only one of them may be retried: reconnecting with a token Home
+ * Assistant has already refused earns the Amiga an IP ban.
+ */
+static void test_auth_rejection_is_distinct_from_a_drop(void)
+{
+    ha_client c;
+    probe     p;
+    a2h_buf   frame;
+
+    /* A close from the server says nothing about the token. */
+    setup(&c, &p);
+    ha_client_begin(&c);
+    complete_handshake(&c);
+    buf_init(&frame);
+    buf_append_byte(&frame, 0x88); /* FIN | close */
+    buf_append_byte(&frame, 2);
+    buf_append_byte(&frame, 0x03);
+    buf_append_byte(&frame, 0xE8); /* 1000, normal */
+    CHECK_INT(ha_client_feed(&c, frame.data, frame.len), 0);
+    buf_free(&frame);
+    CHECK_INT(c.state, HA_ST_FAILED);
+    CHECK_INT(c.auth_rejected, 0);
+    ha_client_free(&c);
+
+    /* A refused token does. */
+    setup(&c, &p);
+    ha_client_begin(&c);
+    complete_handshake(&c);
+    server_send(&c, "{\"type\":\"auth_required\"}");
+    server_send(&c, "{\"type\":\"auth_invalid\",\"message\":\"Invalid access token\"}");
+    CHECK_INT(c.state, HA_ST_FAILED);
+    CHECK_INT(c.auth_rejected, 1);
+
+    /* And it has to outlive the reset a reconnect performs, or the retry
+     * loop forgets why it must not retry. */
+    ha_client_reset(&c);
+    CHECK_INT(c.auth_rejected, 1);
+    ha_client_free(&c);
+}
+
+/*
+ * Request ids belong to the connection that issued them. If a reset kept
+ * the template id, the next connection would unsubscribe a subscription
+ * it never made.
+ */
+static void test_reset_forgets_the_template_subscription(void)
+{
+    ha_client   c;
+    probe       p;
+    fake_server s;
+    char        msg[512];
+
+    setup(&c, &p);
+    server_init(&s);
+    ha_client_set_label(&c, "amiga");
+    ha_client_begin(&c);
+    buf_reset(ha_client_out(&c));
+    complete_handshake(&c);
+    server_send(&c, "{\"type\":\"auth_required\"}");
+    CHECK(server_recv(&s, &c, msg, sizeof msg));    /* auth */
+    server_send(&c, "{\"type\":\"auth_ok\"}");
+    CHECK(server_recv(&s, &c, msg, sizeof msg));    /* render_template */
+    CHECK(strstr(msg, "render_template") != NULL);
+    CHECK(c.template_id != 0);
+
+    ha_client_reset(&c);
+    CHECK_INT((int)c.template_id, 0);
+
+    /* The label itself is configuration and must survive, so the next
+     * connection asks for it again. */
+    ha_client_begin(&c);
+    buf_reset(ha_client_out(&c));   /* discard the HTTP upgrade text */
+    complete_handshake(&c);
+    server_send(&c, "{\"type\":\"auth_required\"}");
+    CHECK(server_recv(&s, &c, msg, sizeof msg));    /* auth */
+    server_send(&c, "{\"type\":\"auth_ok\"}");
+    CHECK(server_recv(&s, &c, msg, sizeof msg));
+    CHECK(strstr(msg, "render_template") != NULL);
+    CHECK(strstr(msg, "amiga") != NULL);
+
+    ha_client_free(&c);
+}
+
 static void test_unchanged_state_does_not_notify(void)
 {
     /* Sensors re-report identical values constantly. The UI must not be
@@ -736,6 +821,8 @@ void suite_ha(void)
     RUN(test_rejects_bad_accept);
     RUN(test_http_error_is_reported);
     RUN(test_auth_invalid);
+    RUN(test_auth_rejection_is_distinct_from_a_drop);
+    RUN(test_reset_forgets_the_template_subscription);
     RUN(test_ping_is_answered_with_pong);
     RUN(test_server_close);
     RUN(test_reset_allows_reconnect);

@@ -181,6 +181,10 @@ void ha_client_reset(ha_client *c)
     c->next_id      = 1;
     c->states_id    = 0;
     c->subscribe_id = 0;
+    /* Ids belong to the connection that issued them. Leaving this set
+     * would have the next connection unsubscribe a template it never
+     * subscribed to. */
+    c->template_id  = 0;
     c->error[0]     = '\0';
     c->version[0]   = '\0';
 }
@@ -710,6 +714,7 @@ static void handle_message(ha_client *c, const char *msg, size_t len)
         c->error[0] = '\0';
         send_initial_requests(c);
     } else if (strcmp(type, "auth_invalid") == 0) {
+        c->auth_rejected = 1;
         fail_client(c, c->error[0] ? c->error : "authentication rejected");
     }
 }

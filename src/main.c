@@ -115,13 +115,10 @@ static void cb_ready(ha_client *c, void *user)
 {
     struct app *a = (struct app *)user;
 
+    A2H_UNUSED(c);
     a->ready = 1;
     if (a->ui) {
-        char msg[96];
-        sprintf(msg, "HA %s, %lu entities",
-                c->version[0] ? c->version : "?",
-                (unsigned long)ha_store_count(&c->store));
-        ui_set_status(a->ui, msg);
+        ui_set_status_connected(a->ui);
         ui_refresh_all(a->ui);
     }
 }
@@ -712,13 +709,9 @@ int main(int argc, char **argv)
                            args.config ? (const char *)args.config : "",
                            uierr, sizeof uierr);
         if (app.ui) {
-            char st[96];
             ui_set_rexx(app.ui, app.rexx);
             /* The connection is already up by the time the window opens. */
-            sprintf(st, "HA %s, %lu entities",
-                    app.ha.version[0] ? app.ha.version : "?",
-                    (unsigned long)ha_store_count(&app.ha.store));
-            ui_set_status(app.ui, st);
+            ui_set_status_connected(app.ui);
             ui_refresh_all(app.ui);
         }
         if (!app.ui) {

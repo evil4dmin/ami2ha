@@ -70,6 +70,23 @@ static void ui_libs_close(void)
 #define ID_RECONNECT   2
 #define ID_WIDGET_BASE 1000
 
+/*
+ * Reconnection. The initial connection is made before the window opens,
+ * so the loop starts LINK_UP and only ever moves away from it when
+ * something goes wrong.
+ */
+typedef enum {
+    LINK_UP = 0,     /* connected, or at least trying nothing else */
+    LINK_RETRYING,   /* down, with an attempt scheduled or running */
+    LINK_GAVE_UP     /* down for a reason retrying cannot fix      */
+} link_state;
+
+#define RETRY_FIRST_SECS 2
+#define RETRY_MAX_SECS   60
+/* How long one attempt gets before it is written off, in ticks. Covers a
+ * server that accepts the connection and then never speaks. */
+#define ATTEMPT_TICKS    (30 * 50)
+
 typedef struct {
     Object *value;   /* Text or Gauge showing the state; NULL for buttons */
     Object *control; /* Checkmark or Button; NULL for read-only widgets   */
@@ -84,6 +101,11 @@ struct a2h_ui {
     char        status_idle[96];  /* what it returns to                  */
     long        status_until;     /* deadline in ticks, if status_timed  */
     int         status_timed;
+
+    link_state  link;
+    long        retry_at;        /* when to make the next attempt      */
+    long        attempt_at;      /* when the running attempt started   */
+    int         retry_secs;      /* current backoff                    */
 
     a2h_config *cfg;
     ha_client  *ha;
@@ -437,6 +459,8 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
 
     strcpy(ui->status_text, "Connecting...");
     strcpy(ui->status_idle, ui->status_text);
+    ui->link       = LINK_UP;   /* main() connected before we got here */
+    ui->retry_secs = RETRY_FIRST_SECS;
 
     ui->status = MUI_NewObject(MUIC_Text,
         MUIA_Text_Contents, (IPTR)ui->status_text,
@@ -742,6 +766,122 @@ static void fire_widget(a2h_ui *ui, int i)
 }
 
 /* ------------------------------------------------------------------ *
+ * Keeping the connection
+ * ------------------------------------------------------------------ */
+
+void ui_set_status_connected(a2h_ui *ui)
+{
+    char st[96];
+
+    if (!ui)
+        return;
+    sprintf(st, "HA %s, %lu entities",
+            ui->ha->version[0] ? ui->ha->version : "?",
+            (unsigned long)ha_store_count(&ui->ha->store));
+    ui_set_status(ui, st);
+}
+
+/* Say what happened and arrange to try again, less eagerly each time. */
+static void schedule_retry(a2h_ui *ui, const char *why)
+{
+    char msg[96];
+
+    ui->link     = LINK_RETRYING;
+    ui->retry_at = ui_now() + (long)ui->retry_secs * 50L;
+    sprintf(msg, "%.56s -- retrying in %ds", why, ui->retry_secs);
+    ui_set_status(ui, msg);
+
+    /* Back off, so a server that is off for an hour is not hammered for
+     * an hour. */
+    ui->retry_secs *= 2;
+    if (ui->retry_secs > RETRY_MAX_SECS)
+        ui->retry_secs = RETRY_MAX_SECS;
+}
+
+/*
+ * The link went away. The window stays up and keeps showing the last
+ * readings -- they are still the best information there is, and blanking
+ * them would lose more than it tells -- with the status line saying that
+ * they are no longer live.
+ */
+static void connection_lost(a2h_ui *ui, const char *why)
+{
+    char reason[64];
+
+    /* Copy first: `why` often points at the client's own error buffer,
+     * which the reset below clears. */
+    strncpy(reason, why ? why : "Disconnected", sizeof reason - 1);
+    reason[sizeof reason - 1] = '\0';
+
+    net_disconnect(ui->sock);
+    ha_client_reset(ui->ha);
+
+    /*
+     * A refused token is the one failure worth giving up on. Home
+     * Assistant bans an address after repeated failed logins, and the
+     * token is read once at startup, so nothing can change until the
+     * program is restarted -- retrying would only get the Amiga locked
+     * out.
+     */
+    if (ui->ha->auth_rejected) {
+        ui->link = LINK_GAVE_UP;
+        ui_set_status(ui, "Token rejected -- restart with a valid token");
+        return;
+    }
+
+    schedule_retry(ui, reason);
+}
+
+static void try_reconnect(a2h_ui *ui)
+{
+    int rc;
+
+    ui->attempt_at = ui_now();
+    ui_set_status(ui, "Reconnecting...");
+
+    rc = net_connect(ui->sock, ui->ha->cfg.host, ui->ha->cfg.port);
+    if (rc < 0) {
+        schedule_retry(ui, net_error_text(rc));
+        return;
+    }
+    if (rc == NET_OK)
+        ha_client_begin(ui->ha);
+    /* Otherwise the connect is under way; net_wait reports the socket
+     * writable and service_socket() finishes it. */
+}
+
+/*
+ * Drive the reconnect timer. Returns how long until the next thing is due
+ * in milliseconds, so the event loop can sleep exactly that long, or -1
+ * when the link wants no attention.
+ */
+static long link_tick(a2h_ui *ui)
+{
+    long now, left;
+
+    if (ui->link != LINK_RETRYING)
+        return -1;
+
+    now = ui_now();
+
+    if (net_socket_is_open(ui->sock)) {
+        left = ui->attempt_at + ATTEMPT_TICKS - now;
+        if (left <= 0 || left > ATTEMPT_TICKS) {   /* elapsed, or midnight */
+            connection_lost(ui, "No answer");
+            return 0;
+        }
+        return left * 20;
+    }
+
+    left = ui->retry_at - now;
+    if (left <= 0 || left > (long)RETRY_MAX_SECS * 50L) {
+        try_reconnect(ui);
+        return 0;
+    }
+    return left * 20;
+}
+
+/* ------------------------------------------------------------------ *
  * Event loop
  * ------------------------------------------------------------------ */
 
@@ -760,7 +900,12 @@ static int flush_output(a2h_ui *ui)
     return 1;
 }
 
-static int service_socket(a2h_ui *ui, int readable, int writable)
+/*
+ * Move bytes in and out. Nothing here ends the program any more: a link
+ * that fails is handed to connection_lost(), which keeps the window up
+ * and schedules another attempt.
+ */
+static void service_socket(a2h_ui *ui, int readable, int writable)
 {
     static unsigned char buf[2048]; /* keep it off the stack, as in main.c */
 
@@ -768,33 +913,39 @@ static int service_socket(a2h_ui *ui, int readable, int writable)
         if (writable) {
             int rc = net_connect_done(ui->sock);
             if (rc < 0) {
-                ui_set_status(ui, net_error_text(rc));
-                return 0;
+                connection_lost(ui, net_error_text(rc));
+                return;
             }
             if (rc == NET_OK)
                 ha_client_begin(ui->ha);
         }
-        return 1;
+        return;
     }
 
-    if (writable && !flush_output(ui))
-        return 0;
+    if (writable && !flush_output(ui)) {
+        connection_lost(ui, "Send failed");
+        return;
+    }
 
     if (readable) {
         long got = net_recv(ui->sock, buf, sizeof buf);
         if (got == NET_CLOSED) {
-            ui_set_status(ui, "Connection closed by server");
-            return 0;
+            connection_lost(ui, "Connection closed");
+            return;
         }
         if (got == NET_ERROR) {
-            ui_set_status(ui, "Network error");
-            return 0;
+            connection_lost(ui, "Network error");
+            return;
         }
-        if (got > 0 && !ha_client_feed(ui->ha, buf, (size_t)got))
-            return 0;
+        if (got > 0 && !ha_client_feed(ui->ha, buf, (size_t)got)) {
+            connection_lost(ui, ui->ha->error[0] ? ui->ha->error
+                                                 : "Protocol error");
+            return;
+        }
     }
 
-    return flush_output(ui);
+    if (!flush_output(ui))
+        connection_lost(ui, "Send failed");
 }
 
 int ui_run(a2h_ui *ui)
@@ -803,8 +954,28 @@ int ui_run(a2h_ui *ui)
     int   rc   = RETURN_OK;
 
     for (;;) {
-        long  status_ms = status_tick(ui);
-        ULONG id = DoMethod(ui->app, MUIM_Application_NewInput, (IPTR)&sigs);
+        long  status_ms, link_ms, wait_ms;
+        ULONG id;
+
+        /*
+         * Notice the link coming back. The first connection is made before
+         * the window opens, so reaching READY here always means a
+         * reconnect has just completed.
+         */
+        if (ui->link == LINK_RETRYING && ui->ha->state == HA_ST_READY) {
+            ui->link       = LINK_UP;
+            ui->retry_secs = RETRY_FIRST_SECS;
+            ui_set_status_connected(ui);
+            ui_refresh_all(ui);
+        }
+
+        status_ms = status_tick(ui);
+        link_ms   = link_tick(ui);
+        wait_ms   = status_ms;
+        if (link_ms >= 0 && (wait_ms < 0 || link_ms < wait_ms))
+            wait_ms = link_ms;
+
+        id = DoMethod(ui->app, MUIM_Application_NewInput, (IPTR)&sigs);
 
         if (id == MUIV_Application_ReturnID_Quit || id == ID_QUIT)
             break;
@@ -820,11 +991,8 @@ int ui_run(a2h_ui *ui)
 
         if (id >= ID_WIDGET_BASE) {
             fire_widget(ui, (int)(id - ID_WIDGET_BASE));
-            if (!flush_output(ui)) {
-                ui_set_status(ui, "Network error");
-                rc = RETURN_FAIL;
-                break;
-            }
+            if (!flush_output(ui))
+                connection_lost(ui, "Send failed");
             continue;
         }
 
@@ -842,7 +1010,7 @@ int ui_run(a2h_ui *ui)
              * WaitSelect takes the Exec mask MUI just gave us, so nothing
              * polls. */
             fired = net_wait(ui->sock, want_write,
-                             sigs | SIGBREAKF_CTRL_C | rexxsig, status_ms,
+                             sigs | SIGBREAKF_CTRL_C | rexxsig, wait_ms,
                              &readable, &writable);
 
             if (fired & SIGBREAKF_CTRL_C)
@@ -857,10 +1025,7 @@ int ui_run(a2h_ui *ui)
             /* Hand MUI back only the signals it asked about. */
             sigs = fired & sigs;
 
-            if (!service_socket(ui, readable, writable)) {
-                rc = RETURN_FAIL;
-                break;
-            }
+            service_socket(ui, readable, writable);
         }
     }
 

@@ -74,6 +74,16 @@ struct ha_client {
     char version[HA_VERSION_MAX]; /* ha_version reported by the server */
     char error[HA_ERROR_MAX];
 
+    /*
+     * The server rejected the token, as opposed to the connection simply
+     * going away. Both end up in HA_ST_FAILED, but only one is worth
+     * retrying: Home Assistant bans an address after repeated failed
+     * logins, so a reconnect loop with a bad token would lock the Amiga
+     * out. Survives ha_client_reset() -- a token that was refused once
+     * will be refused again.
+     */
+    int auth_rejected;
+
     unsigned long next_id;
     unsigned long states_id;
     unsigned long subscribe_id;

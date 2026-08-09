@@ -40,6 +40,12 @@ void ui_entity_changed(a2h_ui *ui, const ha_entity *e);
 void ui_set_status(a2h_ui *ui, const char *text);
 
 /*
+ * Show the usual connected summary: server version and entity count.
+ * Used after the first connection and again after every reconnect.
+ */
+void ui_set_status_connected(a2h_ui *ui);
+
+/*
  * Show a message for three seconds, then fall back to whatever
  * ui_set_status() last set. For acknowledgements -- "Switching on..." is
  * worth seeing when the click happens and is only noise afterwards.
