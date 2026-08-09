@@ -111,6 +111,12 @@ dist:
 	@cp examples/dashboard.cfg $(DISTDIR)/ami2ha/dashboard.cfg.example
 	@sed -e 's/@VERSION@/$(VERSION)/g' install/ReadMe.tmpl \
 	     > $(DISTDIR)/ami2ha/ReadMe
+	@# Aminet wants the readme uploaded beside the archive, not inside
+	@# it, and named to match. Keeping it out of the archive also keeps
+	@# the archive byte-identical wherever it is published, so one
+	@# checksum covers every mirror.
+	@sed -e 's/@VERSION@/$(VERSION)/g' install/aminet.readme.tmpl \
+	     > dist/$(DISTNAME).readme
 	@if command -v lha >/dev/null 2>&1 && \
 	    (cd $(DISTDIR) && lha -aq2 ../$(DISTNAME).lha ami2ha >/dev/null 2>&1) && \
 	    test -f $(DISTLHA); then \

@@ -1,0 +1,84 @@
+Short:        Home Assistant client, MUI dashboard
+Uploader:     jan.stermann@krankikom.de (Jan Stermann)
+Author:       jan.stermann@krankikom.de (Jan Stermann)
+Type:         comm/tcp
+Version:      @VERSION@
+Architecture: m68k-amigaos
+Distribution: Aminet
+Requires:     bsdsocket.library; MUI 3.8+ for the dashboard
+
+
+ami2ha -- control your smart home from a real Amiga
+===================================================
+
+A native AmigaOS client for Home Assistant, the open-source home
+automation server. Read your sensors, watch entity states and flip your
+switches from a MUI dashboard, with an ARexx port so the rest of your
+Workbench can join in.
+
+
+WHAT IT DOES
+
+  - sensors, gauges, toggles and buttons on a configurable MUI dashboard
+  - pick which entities appear by giving them a label in Home Assistant,
+    so you can change what the Amiga shows without touching the Amiga
+  - a settings window for grouping, ordering, labelling and choosing how
+    each entity is displayed
+  - an ARexx port (AMI2HA): GET, ATTR, LIST, TOGGLE, ON, OFF, CALL,
+    STATUS, so other programs can read the house and control it
+  - reconnects by itself when the link drops, backing off up to a minute
+  - starts from Workbench, with its settings in the icon's tool types
+  - command line modes that work without MUI: LIST, GET, ON, OFF, WATCH
+
+Memory follows the size of your dashboard, not the size of your Home
+Assistant. It asks the server only for the entities you show: measured
+against an installation with 2079 entities, a dozen of them cost 1.3 KB
+rather than 960 KB.
+
+
+REQUIREMENTS
+
+  - AmigaOS 3.0 or newer
+  - a TCP/IP stack offering bsdsocket.library -- Roadshow, AmiTCP,
+    Miami, or UAE's own emulation
+  - MUI 3.8 or newer for the dashboard; the command line modes work
+    without it
+  - a 68020 is comfortable; a 68000 build is included and works, but
+    JSON over TCP on a stock A500 is slow
+  - a long-lived access token from your own Home Assistant
+
+
+INSTALLING
+
+Unpack and double-click Install, or from a Shell inside the drawer:
+
+    Installer Install
+
+Both a 68000 and a 68020 build are included; the installer picks the one
+that matches. Full instructions are in ami2ha.guide -- open it with
+MultiView.
+
+You will need a long-lived access token: in Home Assistant, click your
+user name at the bottom left, open the Security tab, and create one under
+"Long-lived access tokens". It is shown once. Keep it in a file, and do
+not pass it on a command line where your shell history would remember it.
+It travels over your network in the clear, which is fine on your own LAN
+and not fine over the internet.
+
+
+NOT YET
+
+  - HTTPS (AmiSSL). Your server must be reachable over plain HTTP, which
+    on most home setups it is, on port 8123 from inside the network.
+  - drag-and-drop reordering; Up and Down work today
+
+
+LICENCE
+
+MIT. Do what you like with it. Source, issues and newer versions:
+
+    https://github.com/evil4dmin/ami2ha
+
+Home Assistant is a separate project and nothing to do with the author:
+
+    https://www.home-assistant.io/
