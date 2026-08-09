@@ -574,19 +574,19 @@ static void handle_event(ha_client *c, long id, json_parser *jp, json_token *tok
             json_token ent;
 
             while (json_next(jp, &ent) == JSON_KEY) {
-                char id[HA_ENTITY_ID_MAX];
+                char      ent_id[HA_ENTITY_ID_MAX];
                 json_type evt;
 
-                json_str_copy(&ent, id, sizeof id);
+                json_str_copy(&ent, ent_id, sizeof ent_id);
                 evt = json_next(jp, &ent);
                 if (evt != JSON_OBJECT_BEGIN) {
                     json_skip(jp, &ent);
                     continue;
                 }
                 if (is_added)
-                    notify_changed(c, apply_compact_entity(c, id, jp));
+                    notify_changed(c, apply_compact_entity(c, ent_id, jp));
                 else
-                    apply_compact_change(c, id, jp);
+                    apply_compact_change(c, ent_id, jp);
             }
 
             /* The first "a" block completes the initial load. */
@@ -601,9 +601,9 @@ static void handle_event(ha_client *c, long id, json_parser *jp, json_token *tok
         if (is_rem && vt == JSON_ARRAY_BEGIN) {
             json_token gone;
             while (json_next(jp, &gone) == JSON_STRING) {
-                char id[HA_ENTITY_ID_MAX];
-                json_str_copy(&gone, id, sizeof id);
-                ha_store_remove(&c->store, id);
+                char ent_id[HA_ENTITY_ID_MAX];
+                json_str_copy(&gone, ent_id, sizeof ent_id);
+                ha_store_remove(&c->store, ent_id);
             }
             continue;
         }
