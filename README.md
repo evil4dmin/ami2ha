@@ -169,6 +169,7 @@ entity changes. The command set is designed in
 - [x] Command line client (`LIST`, `GET`, `WATCH`, `TOGGLE`, `ON`, `OFF`)
 - [x] Dashboard configuration format, parser and generator
 - [x] MUI dashboard: sensors, gauges, toggles, buttons, live updates
+- [ ] Choose entities from within Home Assistant (see docs/IDEAS.md)
 - [ ] In-app dashboard editor
 - [ ] Reconnect handling and connection status UI
 - [ ] ARexx host port
