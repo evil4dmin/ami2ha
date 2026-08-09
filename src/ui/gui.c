@@ -16,6 +16,7 @@
 #include <libraries/mui.h>
 #include <proto/muimaster.h>
 #include <proto/intuition.h>
+#include <proto/dos.h>
 
 #include "ami2ha/json.h"
 #include "ami2ha/ui.h"
@@ -79,7 +80,10 @@ struct a2h_ui {
     Object     *app;
     Object     *win;
     Object     *status;
-    char        status_text[96];
+    char        status_text[96];  /* what the line currently shows       */
+    char        status_idle[96];  /* what it returns to                  */
+    long        status_until;     /* deadline in ticks, if status_timed  */
+    int         status_timed;
 
     a2h_config *cfg;
     ha_client  *ha;
@@ -397,6 +401,7 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
     }
 
     strcpy(ui->status_text, "Connecting...");
+    strcpy(ui->status_idle, ui->status_text);
 
     ui->status = MUI_NewObject(MUIC_Text,
         MUIA_Text_Contents, (IPTR)ui->status_text,
@@ -536,13 +541,66 @@ void ui_dispose(a2h_ui *ui)
  * Updates
  * ------------------------------------------------------------------ */
 
+/* Three seconds, in ticks of a fiftieth of a second. */
+#define STATUS_FLASH_TICKS 150
+
+/*
+ * Ticks since midnight. Enough resolution for a status timeout and cheap
+ * enough to read on every pass -- no timer.device unit to open and serve.
+ * It wraps once a day, which status_tick() treats as an expiry.
+ */
+static long ui_now(void)
+{
+    struct DateStamp ds;
+    DateStamp(&ds);
+    return (long)ds.ds_Minute * 3000L + (long)ds.ds_Tick;
+}
+
+static void status_show(a2h_ui *ui, const char *text)
+{
+    strncpy(ui->status_text, text, sizeof ui->status_text - 1);
+    ui->status_text[sizeof ui->status_text - 1] = '\0';
+    set(ui->status, MUIA_Text_Contents, (IPTR)ui->status_text);
+}
+
 void ui_set_status(a2h_ui *ui, const char *text)
 {
     if (!ui || !ui->status)
         return;
-    strncpy(ui->status_text, text, sizeof ui->status_text - 1);
-    ui->status_text[sizeof ui->status_text - 1] = '\0';
-    set(ui->status, MUIA_Text_Contents, (IPTR)ui->status_text);
+    strncpy(ui->status_idle, text, sizeof ui->status_idle - 1);
+    ui->status_idle[sizeof ui->status_idle - 1] = '\0';
+    ui->status_timed = 0;
+    status_show(ui, ui->status_idle);
+}
+
+void ui_flash_status(a2h_ui *ui, const char *text)
+{
+    if (!ui || !ui->status)
+        return;
+    ui->status_until = ui_now() + STATUS_FLASH_TICKS;
+    ui->status_timed = 1;
+    status_show(ui, text);
+}
+
+/*
+ * Put the resting text back once a flashed message has had its time.
+ * Returns how long until that is due in milliseconds, so the event loop
+ * can wake up for it, or -1 when nothing is pending.
+ */
+static long status_tick(a2h_ui *ui)
+{
+    long left;
+
+    if (!ui->status_timed)
+        return -1;
+
+    left = ui->status_until - ui_now();
+    if (left <= 0 || left > STATUS_FLASH_TICKS) {   /* elapsed, or midnight */
+        ui->status_timed = 0;
+        status_show(ui, ui->status_idle);
+        return -1;
+    }
+    return left * 20;
 }
 
 static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
@@ -629,7 +687,7 @@ static void fire_widget(a2h_ui *ui, int i)
          * what they clicked. */
         int want_on = (int)xget(ui->widgets[i].control, MUIA_Selected);
         ha_client_turn(ui->ha, w->entity, want_on);
-        ui_set_status(ui, want_on ? "Switching on..." : "Switching off...");
+        ui_flash_status(ui, want_on ? "Switching on..." : "Switching off...");
     } else if (w->kind == W_BUTTON) {
         char domain[24], service[32];
         const char *dot = strchr(w->service, '.');
@@ -646,7 +704,7 @@ static void fire_widget(a2h_ui *ui, int i)
             ha_client_call_service(ui->ha, domain, service,
                                    w->entity[0] ? w->entity : NULL,
                                    w->data[0] ? w->data : NULL);
-            ui_set_status(ui, w->label);
+            ui_flash_status(ui, w->label);
         }
     }
 }
@@ -713,6 +771,7 @@ int ui_run(a2h_ui *ui)
     int   rc   = RETURN_OK;
 
     for (;;) {
+        long  status_ms = status_tick(ui);
         ULONG id = DoMethod(ui->app, MUIM_Application_NewInput, (IPTR)&sigs);
 
         if (id == MUIV_Application_ReturnID_Quit || id == ID_QUIT)
@@ -751,7 +810,7 @@ int ui_run(a2h_ui *ui)
              * WaitSelect takes the Exec mask MUI just gave us, so nothing
              * polls. */
             fired = net_wait(ui->sock, want_write,
-                             sigs | SIGBREAKF_CTRL_C | rexxsig, -1,
+                             sigs | SIGBREAKF_CTRL_C | rexxsig, status_ms,
                              &readable, &writable);
 
             if (fired & SIGBREAKF_CTRL_C)

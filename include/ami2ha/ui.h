@@ -36,8 +36,15 @@ int ui_run(a2h_ui *ui);
 /* Reflect a changed entity in whichever gadgets are bound to it. */
 void ui_entity_changed(a2h_ui *ui, const ha_entity *e);
 
-/* Show a line of status text under the dashboard. */
+/* Show a line of status text under the dashboard, and keep it there. */
 void ui_set_status(a2h_ui *ui, const char *text);
+
+/*
+ * Show a message for three seconds, then fall back to whatever
+ * ui_set_status() last set. For acknowledgements -- "Switching on..." is
+ * worth seeing when the click happens and is only noise afterwards.
+ */
+void ui_flash_status(a2h_ui *ui, const char *text);
 
 /* Refresh every widget from the store, e.g. after the initial load. */
 void ui_refresh_all(a2h_ui *ui);
