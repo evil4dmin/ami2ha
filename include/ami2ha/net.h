@@ -37,6 +37,9 @@ int  net_lib_open(void);
 
 /* Version of bsdsocket.library actually opened; 0 before net_lib_open. */
 extern long net_socket_api_version;
+
+/* Errno() captured from the last failing socket call, for diagnostics. */
+extern long net_last_errno;
 void net_lib_close(void);
 
 const char *net_error_text(int code);

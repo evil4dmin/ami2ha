@@ -16,7 +16,18 @@ VC_CONFIG   ?= aos68k
 CPU         ?= 68000
 
 # Optimisation level passed to vbcc.
-OPT         ?= 2
+#
+# MUST NOT be raised to 2 with vbcc 0.9hP2. At -O=2 its m68k backend emits
+# library calls without ever loading the argument registers: it computes the
+# library base, the name pointer and the version into stack slots and then
+# issues `jsr -552(a6)` with a6, a1 and d0 untouched. Every OpenLibrary and
+# every library function call in the program is affected, which shows up as
+# unexplainable Gurus rather than as anything resembling a compiler fault.
+#
+# Reproduced by compiling src/net/socket.c at each level and calling
+# net_lib_open on real hardware: -O=0 and -O=1 return a valid library base,
+# -O=2 returns NULL.
+OPT         ?= 1
 
 # Build AmiSSL support for https:// endpoints. Requires the AmiSSL SDK.
 # Set to 1 and point AMISSL_SDK at the extracted Developer/ directory.

@@ -28,6 +28,7 @@ struct a2h_timeval {
 };
 
 long net_socket_api_version = 0;
+long net_last_errno = 0;   /* Errno() from the most recent failing call */
 
 int net_lib_open(void)
 {
@@ -131,7 +132,8 @@ int net_connect(a2h_socket *s, const char *host, int port)
     if (rc == 0)
         return NET_OK;
 
-    if (Errno() == EINPROGRESS || Errno() == EWOULDBLOCK) {
+    net_last_errno = Errno();
+    if (net_last_errno == EINPROGRESS || net_last_errno == EWOULDBLOCK) {
         s->connecting = 1;
         return 1;
     }
