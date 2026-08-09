@@ -217,7 +217,11 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             MUIA_Gauge_Max,     (IPTR)1000,
             MUIA_Gauge_Current, (IPTR)0,
             MUIA_Gauge_InfoText,(IPTR)uw->text,
-            MUIA_Frame,         MUIV_Frame_Gauge,
+            /* Frame_Text rather than Frame_Gauge: the two reserve different
+             * amounts of horizontal space, and since FixWidthTxt fixes the
+             * inner width, that difference would leave the gauge a few
+             * pixels narrower than the reading fields beside it. */
+            MUIA_Frame,         MUIV_Frame_Text,
             MUIA_FixWidthTxt,   (IPTR)"-8888.8 XXXX",
             TAG_DONE);
         if (!uw->value)
