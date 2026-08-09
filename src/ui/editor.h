@@ -28,7 +28,11 @@ typedef struct a2h_editor a2h_editor;
 #define ID_ED_CANCEL    (ID_ED_BASE + 9)
 #define ID_ED_UP        (ID_ED_BASE + 10)
 #define ID_ED_DOWN      (ID_ED_BASE + 11)
-#define ID_ED_LAST      (ID_ED_BASE + 11)
+#define ID_ED_SELECT    (ID_ED_BASE + 12)
+#define ID_ED_RENAME    (ID_ED_BASE + 13)
+#define ID_ED_LABEL     (ID_ED_BASE + 14)
+#define ID_ED_RANGE     (ID_ED_BASE + 15)
+#define ID_ED_LAST      (ID_ED_BASE + 15)
 
 /*
  * `cfg` is edited in place when the user applies; a copy is kept so Cancel

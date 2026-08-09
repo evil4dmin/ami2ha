@@ -34,6 +34,7 @@ struct a2h_editor {
     Object *cyc_group, *list_kind;
     Object *bt_add, *bt_remove, *bt_gnew, *bt_gdel;
     Object *bt_up, *bt_down;
+    Object *str_group, *str_label, *str_min, *str_max;
     Object *bt_save, *bt_use, *bt_cancel;
 
     a2h_config *cfg;      /* the live configuration, edited on apply */
@@ -161,6 +162,9 @@ static void build_used(a2h_editor *ed)
     ed->nused = n;
 }
 
+static void show_properties(a2h_editor *ed);
+static int  apply(a2h_editor *ed);
+
 static void fill_list(Object *list, ed_row *rows, int n)
 {
     int i;
@@ -181,6 +185,7 @@ static void refresh_lists(a2h_editor *ed)
     fill_list(ed->list_used, ed->used, ed->nused);
     set(ed->list_pool, MUIA_List_Quiet, FALSE);
     set(ed->list_used, MUIA_List_Quiet, FALSE);
+    show_properties(ed);
 }
 
 static void refresh_groups(a2h_editor *ed)
@@ -200,9 +205,16 @@ static void refresh_groups(a2h_editor *ed)
     ed->ngroup_titles = ed->cfg->ngroups ? ed->cfg->ngroups : 1;
 
     SetAttrs(ed->cyc_group,
+             MUIA_NoNotify,      TRUE,
              MUIA_Cycle_Entries, (IPTR)ed->group_titles,
              MUIA_Cycle_Active,  (IPTR)(ed->group < ed->ngroup_titles ? ed->group : 0),
              TAG_DONE);
+
+    if (ed->str_group)
+        SetAttrs(ed->str_group, MUIA_NoNotify, TRUE,
+                 MUIA_String_Contents,
+                 (IPTR)(ed->cfg->ngroups ? ed->cfg->groups[ed->group].title : ""),
+                 TAG_DONE);
 }
 
 /* ------------------------------------------------------------------ *
@@ -358,6 +370,24 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
     strncpy(ed->path, path ? path : "", sizeof ed->path - 1);
 
     ed->cyc_group = MUI_NewObject(MUIC_Cycle, TAG_DONE);
+    ed->str_group = MUI_NewObject(MUIC_String,
+        MUIA_Frame,          MUIV_Frame_String,
+        MUIA_String_MaxLen,  (IPTR)CFG_TITLE_MAX,
+        TAG_DONE);
+    ed->str_label = MUI_NewObject(MUIC_String,
+        MUIA_Frame,          MUIV_Frame_String,
+        MUIA_String_MaxLen,  (IPTR)CFG_LABEL_MAX,
+        TAG_DONE);
+    ed->str_min = MUI_NewObject(MUIC_String,
+        MUIA_Frame,          MUIV_Frame_String,
+        MUIA_String_Accept,  (IPTR)"-0123456789",
+        MUIA_String_MaxLen,  (IPTR)12,
+        TAG_DONE);
+    ed->str_max = MUI_NewObject(MUIC_String,
+        MUIA_Frame,          MUIV_Frame_String,
+        MUIA_String_Accept,  (IPTR)"-0123456789",
+        MUIA_String_MaxLen,  (IPTR)12,
+        TAG_DONE);
     ed->list_kind = MUI_NewObject(MUIC_Cycle,
         MUIA_Cycle_Entries, (IPTR)kind_labels, TAG_DONE);
 
@@ -395,6 +425,10 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
                 MUIA_Group_Child, (IPTR)ed->cyc_group,
                 MUIA_Group_Child, (IPTR)ed->bt_gnew,
                 MUIA_Group_Child, (IPTR)ed->bt_gdel,
+                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                    MUIA_Text_Contents, (IPTR)"Name:",
+                    MUIA_Weight, (IPTR)0, TAG_DONE),
+                MUIA_Group_Child, (IPTR)ed->str_group,
                 TAG_DONE),
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
                 MUIA_Group_Horiz, TRUE,
@@ -419,10 +453,24 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
                 TAG_DONE),
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
                 MUIA_Group_Horiz, TRUE,
+                MUIA_Frame,       MUIV_Frame_Group,
+                MUIA_FrameTitle,  (IPTR)"Selected entity",
+                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                    MUIA_Text_Contents, (IPTR)"Label:",
+                    MUIA_Weight, (IPTR)0, TAG_DONE),
+                MUIA_Group_Child, (IPTR)ed->str_label,
                 MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
                     MUIA_Text_Contents, (IPTR)"Show as:",
                     MUIA_Weight, (IPTR)0, TAG_DONE),
                 MUIA_Group_Child, (IPTR)ed->list_kind,
+                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                    MUIA_Text_Contents, (IPTR)"Min:",
+                    MUIA_Weight, (IPTR)0, TAG_DONE),
+                MUIA_Group_Child, (IPTR)ed->str_min,
+                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                    MUIA_Text_Contents, (IPTR)"Max:",
+                    MUIA_Weight, (IPTR)0, TAG_DONE),
+                MUIA_Group_Child, (IPTR)ed->str_max,
                 TAG_DONE),
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
                 MUIA_Group_Horiz, TRUE,
@@ -465,6 +513,16 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_GROUP_SEL);
     DoMethod(ed->list_kind, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_KIND);
+    DoMethod(ed->list_used, MUIM_Notify, MUIA_List_Active, MUIV_EveryTime,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_SELECT);
+    DoMethod(ed->str_group, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_RENAME);
+    DoMethod(ed->str_label, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_LABEL);
+    DoMethod(ed->str_min, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_RANGE);
+    DoMethod(ed->str_max, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_RANGE);
 
     return ed;
 }
@@ -607,30 +665,147 @@ static void group_delete(a2h_editor *ed)
     refresh_lists(ed);
 }
 
-static void set_kind_of_selected(a2h_editor *ed)
+/* The widget behind the highlighted row, or NULL. */
+static a2h_widget *selected_widget(a2h_editor *ed, ed_row **rowp, LONG *posp)
 {
-    LONG    active = MUIV_List_Active_Off, kind = 0;
-    ed_row *row = NULL;
+    LONG    active = MUIV_List_Active_Off;
+    ed_row *row    = NULL;
     int     i;
 
     get(ed->list_used, MUIA_List_Active, &active);
-    get(ed->list_kind, MUIA_Cycle_Active, &kind);
     if (active == MUIV_List_Active_Off)
-        return;
+        return NULL;
 
     DoMethod(ed->list_used, MUIM_List_GetEntry, active, (IPTR)&row);
     if (!row)
+        return NULL;
+
+    if (rowp) *rowp = row;
+    if (posp) *posp = active;
+
+    for (i = 0; i < ed->cfg->nwidgets; i++)
+        if (strcmp(ed->cfg->widgets[i].entity, row->entity) == 0)
+            return &ed->cfg->widgets[i];
+    return NULL;
+}
+
+/*
+ * Show the highlighted entity's settings in the property gadgets.
+ *
+ * Every set here uses MUIA_NoNotify. Without it, filling the gadgets fires
+ * their own notifications, and the resulting event arrives after the
+ * selection has already moved -- stamping the previously shown value onto
+ * the newly selected entity. Selecting one entity would silently change
+ * another.
+ */
+static void show_properties(a2h_editor *ed)
+{
+    a2h_widget *w = selected_widget(ed, NULL, NULL);
+    int         gauge;
+
+    if (!w) {
+        SetAttrs(ed->str_label, MUIA_NoNotify, TRUE,
+                 MUIA_String_Contents, (IPTR)"",
+                 MUIA_Disabled, TRUE, TAG_DONE);
+        SetAttrs(ed->list_kind, MUIA_NoNotify, TRUE,
+                 MUIA_Disabled, TRUE, TAG_DONE);
+        SetAttrs(ed->str_min, MUIA_NoNotify, TRUE,
+                 MUIA_Disabled, TRUE, TAG_DONE);
+        SetAttrs(ed->str_max, MUIA_NoNotify, TRUE,
+                 MUIA_Disabled, TRUE, TAG_DONE);
+        return;
+    }
+
+    gauge = (w->kind == W_GAUGE);
+    SetAttrs(ed->str_label, MUIA_NoNotify, TRUE,
+             MUIA_Disabled, FALSE,
+             MUIA_String_Contents, (IPTR)w->label, TAG_DONE);
+    SetAttrs(ed->list_kind, MUIA_NoNotify, TRUE,
+             MUIA_Disabled, FALSE,
+             MUIA_Cycle_Active, (IPTR)w->kind, TAG_DONE);
+    /* Min and max only mean anything for a gauge. */
+    SetAttrs(ed->str_min, MUIA_NoNotify, TRUE,
+             MUIA_Disabled, !gauge,
+             MUIA_String_Integer, (IPTR)w->min, TAG_DONE);
+    SetAttrs(ed->str_max, MUIA_NoNotify, TRUE,
+             MUIA_Disabled, !gauge,
+             MUIA_String_Integer, (IPTR)w->max, TAG_DONE);
+}
+
+static void set_kind_of_selected(a2h_editor *ed)
+{
+    ed_row     *row = NULL;
+    LONG        pos = 0, kind = 0;
+    a2h_widget *w   = selected_widget(ed, &row, &pos);
+
+    get(ed->list_kind, MUIA_Cycle_Active, &kind);
+    if (!w || !row)
         return;
 
-    for (i = 0; i < ed->cfg->nwidgets; i++) {
-        if (strcmp(ed->cfg->widgets[i].entity, row->entity) == 0) {
-            ed->cfg->widgets[i].kind = (widget_kind)kind;
-            row_fill(row, ed->ha, row->entity,
-                     ed->cfg->widgets[i].label, (widget_kind)kind);
-            DoMethod(ed->list_used, MUIM_List_Redraw, active);
-            break;
-        }
-    }
+    w->kind = (widget_kind)kind;
+    row_fill(row, ed->ha, row->entity, w->label, w->kind);
+    DoMethod(ed->list_used, MUIM_List_Redraw, pos);
+    show_properties(ed);   /* min/max become live for a gauge */
+}
+
+static void set_label_of_selected(a2h_editor *ed)
+{
+    ed_row     *row = NULL;
+    LONG        pos = 0;
+    a2h_widget *w   = selected_widget(ed, &row, &pos);
+    STRPTR      text = NULL;
+
+    if (!w || !row)
+        return;
+
+    get(ed->str_label, MUIA_String_Contents, &text);
+    if (!text)
+        return;
+
+    strncpy(w->label, (const char *)text, sizeof w->label - 1);
+    w->label[sizeof w->label - 1] = '\0';
+    row_fill(row, ed->ha, row->entity, w->label, w->kind);
+    DoMethod(ed->list_used, MUIM_List_Redraw, pos);
+}
+
+static void set_range_of_selected(a2h_editor *ed)
+{
+    a2h_widget *w = selected_widget(ed, NULL, NULL);
+    LONG        lo = 0, hi = 0;
+
+    if (!w)
+        return;
+
+    get(ed->str_min, MUIA_String_Integer, &lo);
+    get(ed->str_max, MUIA_String_Integer, &hi);
+
+    /* An inverted or empty range would divide by zero when drawing. */
+    if (hi <= lo)
+        hi = lo + 1;
+
+    w->min = lo;
+    w->max = hi;
+    /* Writing the corrected value back must not re-trigger this handler. */
+    SetAttrs(ed->str_max, MUIA_NoNotify, TRUE,
+             MUIA_String_Integer, (IPTR)hi, TAG_DONE);
+}
+
+static void rename_group(a2h_editor *ed)
+{
+    STRPTR text = NULL;
+
+    if (ed->group < 0 || ed->group >= ed->cfg->ngroups)
+        return;
+
+    get(ed->str_group, MUIA_String_Contents, &text);
+    if (!text || !*text)
+        return;
+
+    strncpy(ed->cfg->groups[ed->group].title, (const char *)text,
+            sizeof ed->cfg->groups[ed->group].title - 1);
+    ed->cfg->groups[ed->group].title[
+        sizeof ed->cfg->groups[ed->group].title - 1] = '\0';
+    refresh_groups(ed);
 }
 
 static int apply(a2h_editor *ed)
@@ -654,6 +829,10 @@ int editor_handle(a2h_editor *ed, unsigned long id, int *relayout)
 
     case ID_ED_ADD:
         move_selected(ed, 1);
+        /* Make it a real widget at once, so its properties are editable
+         * without having to apply first. */
+        apply(ed);
+        show_properties(ed);
         break;
 
     case ID_ED_REMOVE:
@@ -688,6 +867,22 @@ int editor_handle(a2h_editor *ed, unsigned long id, int *relayout)
 
     case ID_ED_KIND:
         set_kind_of_selected(ed);
+        break;
+
+    case ID_ED_SELECT:
+        show_properties(ed);
+        break;
+
+    case ID_ED_RENAME:
+        rename_group(ed);
+        break;
+
+    case ID_ED_LABEL:
+        set_label_of_selected(ed);
+        break;
+
+    case ID_ED_RANGE:
+        set_range_of_selected(ed);
         break;
 
     case ID_ED_USE:

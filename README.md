@@ -134,7 +134,12 @@ Widget kinds are `sensor`, `toggle`, `gauge`, `button` and `text`. See
 
 You do not have to edit the file, though: **Project → Settings…** opens a
 window where you pick which of the available entities appear, put them in
-groups, order them, and choose how each is shown. Save writes the file back.
+groups, name the groups, order them, and set how each is shown -- including
+the range for a gauge, which is the one thing that cannot be guessed. Save
+writes the file back.
+
+Note that MUI's cycle gadgets open a popup menu: press and hold, then
+release over the entry you want.
 
 ### Or choose the entities in Home Assistant
 
@@ -207,7 +212,7 @@ back. See [docs/AREXX.md](docs/AREXX.md) for the full command set.
 - [x] MUI dashboard: sensors, gauges, toggles, buttons, live updates
 - [x] Choose entities from within Home Assistant, by label
 - [x] Settings window: groups, choose entities, reorder, save
-- [ ] Drag-and-drop reordering (needs a List subclass; Up/Down works today)
+- [ ] Drag-and-drop reordering (nice-to-have; Up/Down works today)
 - [ ] Reconnect handling and connection status UI
 - [x] ARexx host port
 - [ ] Optional AmiSSL support
