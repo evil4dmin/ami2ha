@@ -91,3 +91,44 @@ from our own code are not filtered.
 machine, or to an emulator — [vAmiga](https://vamiga.me) (`brew install
 vamiga`) and FS-UAE both work. You will need MUI and a TCP/IP stack installed
 in the emulated environment.
+
+## Making a release
+
+```
+make dist
+```
+
+This builds both CPU variants, stages `dist/ami2ha-<version>/ami2ha/`
+with the binaries, the AmigaGuide manual, the Installer script, an
+example configuration and the licence, and packs it as a `.lha`.
+
+The version comes from `include/ami2ha/version.h`, which is also what
+the window title, the About box and the ARexx `VERSION` command read, so
+they cannot disagree.
+
+**Packing needs an archiver that can create LhA archives.** The `lha` in
+Homebrew is Lhasa, which only extracts; `make dist` notices, leaves the
+staged drawer in place, and tells you. The simplest way round it is to
+pack on the Amiga itself, which is also what produces the most
+Amiga-correct archive:
+
+```
+LhA -r a ami2ha-0.1.lha ami2ha
+```
+
+Verify the result extracts into a drawer rather than loose files:
+
+```
+LhA x ami2ha-0.1.lha
+```
+
+### Before publishing one
+
+Worth doing on a real system, because it is what everybody else will do
+first:
+
+- run `Installer Install` from inside the unpacked drawer, at the
+  default Novice level as well as Average — Novice answers every
+  question from its default without showing it
+- check the installed drawer gets an `ami2ha.info` it can be started from
+- open `ami2ha.guide` in MultiView and follow a couple of links

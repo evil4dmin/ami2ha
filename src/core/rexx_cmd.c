@@ -1,4 +1,5 @@
 /* ami2ha -- ARexx command execution (portable) */
+#include "ami2ha/version.h"
 #include "ami2ha/rexx.h"
 
 #include "ami2ha/entity.h"
@@ -310,7 +311,7 @@ int rexx_execute(ha_client *c, const char *line, a2h_buf *out,
         return REXX_RC_OK;
     }
     if (rx_is(cmd, "VERSION")) {
-        buf_append_str(out, "ami2ha 0.1");
+        buf_append_str(out, A2H_NAME " " A2H_VERSION);
         return REXX_RC_OK;
     }
     if (rx_is(cmd, "QUIT")) {

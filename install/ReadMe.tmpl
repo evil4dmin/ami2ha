@@ -1,0 +1,66 @@
+ami2ha @VERSION@ -- a Home Assistant client for AmigaOS
+=======================================================
+
+Read your sensors and flip your switches from a real Amiga.
+
+
+Installing
+----------
+
+Double-click Install, or from a Shell inside this drawer:
+
+    Installer Install
+
+It copies the build matching your processor, writes a starter
+configuration, and makes an icon you can double-click.
+
+To install by hand instead, copy ami2ha.020 (or ami2ha.000 on a
+68000 or 68010) wherever you like and rename it to ami2ha.
+
+
+What you need
+-------------
+
+    AmigaOS 3.0 or newer
+    a TCP/IP stack offering bsdsocket.library
+        -- Roadshow, AmiTCP, Miami, or UAE's own emulation
+    MUI 3.8 or newer, for the dashboard
+        -- the command line modes work without it
+
+A 68020 is comfortable. The 68000 build works but is slow.
+
+
+Before it can connect
+---------------------
+
+You need a long-lived access token from Home Assistant. In a
+browser: click your user name at the bottom left, open the
+Security tab, and create one under "Long-lived access tokens".
+It is shown once, so copy it there and then.
+
+Put it in a file of its own, ha.token, in the installation drawer.
+
+That token can control everything in your house. Keep the file to
+yourself, and do not pass the token on a command line where your
+shell history would keep it.
+
+
+The manual
+----------
+
+ami2ha.guide covers the rest: choosing which entities appear,
+the dashboard, the settings window, starting it from Workbench,
+the ARexx port, and what to do when something does not work.
+
+Open it with MultiView, or double-click it.
+
+
+Licence
+-------
+
+MIT. See LICENSE. Do what you like with it.
+
+    https://github.com/evil4dmin/ami2ha
+
+Home Assistant is a separate project, nothing to do with these
+authors: https://www.home-assistant.io/

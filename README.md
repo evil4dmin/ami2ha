@@ -6,11 +6,30 @@ Control your smart home from a real Amiga: read sensors, watch entity states,
 flip switches and dimmers — from a fully configurable MUI dashboard, with an
 ARexx port so the rest of your Workbench can join in.
 
-> **Status: early development.** The full stack works — TCP, WebSocket,
-> authentication, live updates, and a MUI dashboard driven by a
-> configuration file. The ARexx port and the in-app dashboard editor are
-> not written yet. **None of it has been run against a real Home Assistant
-> yet**, only against tests; see [Roadmap](#roadmap).
+> **Status: early, but it works.** Everything below has been run on real
+> AmigaOS 3.2 hardware against a live Home Assistant: reading sensors,
+> flipping switches, the settings window, the ARexx port, Workbench
+> launch, and reconnecting after the link drops. What is missing is
+> HTTPS (AmiSSL) and drag-and-drop reordering; see
+> [Roadmap](#roadmap).
+
+## Try it
+
+Grab the release archive, unpack it, and double-click `Install`:
+
+```
+lha x ami2ha-0.1.lha
+```
+
+You will need a long-lived access token from Home Assistant — click your
+user name at the bottom left, open the **Security** tab, and create one
+under *Long-lived access tokens*. Keep it in a file; never pass it on a
+command line, where your shell history would remember it.
+
+The archive contains `ami2ha.guide`, which covers the rest: choosing
+which entities appear, the dashboard, the settings window, the ARexx
+port, and what to do when something does not work. Open it with
+MultiView.
 
 ## Target systems
 
@@ -37,9 +56,8 @@ src/core/     pure C99, no Amiga headers, no OS calls
               -> compiled into BOTH the Amiga binary and the host test runner
 
 src/net/      bsdsocket.library transport, optional AmiSSL
-src/ui/       MUI interface and the dashboard editor        (not written yet)
-src/rexx/     ARexx host port                               (not written yet)
-src/config/   preferences load/save                         (not written yet)
+src/ui/       MUI dashboard and the settings window
+src/rexx/     ARexx host port
 src/main.c    command line front end
 ```
 
@@ -224,11 +242,11 @@ back. See [docs/AREXX.md](docs/AREXX.md) for the full command set.
 - [x] Choose entities from within Home Assistant, by label
 - [x] Settings window: groups, choose entities, reorder, save
 - [ ] Drag-and-drop reordering (nice-to-have; Up/Down works today)
-- [ ] Reconnect handling and connection status UI
+- [x] Reconnect handling and connection status UI
 - [x] ARexx host port
 - [ ] Optional AmiSSL support
 - [x] Workbench launch via icon tool types (WRITEICON)
-- [ ] Installer and documentation
+- [x] Installer, AmigaGuide manual, release archive
 
 ## Contributing
 

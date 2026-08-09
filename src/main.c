@@ -522,6 +522,20 @@ int main(int argc, char **argv)
         }
     }
 
+    /*
+     * Writing the icon only records the paths it is given; it needs no
+     * host and no token. Doing it here rather than further down means a
+     * fresh installation can create its icon before the token file it
+     * will eventually use exists.
+     */
+    if (args.writeicon) {
+        int wrote = write_icon(argv && argv[0] ? argv[0] : "ami2ha", &args);
+        free_dash(&dash);
+        if (rda) FreeArgs(rda);
+        if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
+        return wrote ? RETURN_OK : RETURN_FAIL;
+    }
+
     memset(&cfg, 0, sizeof cfg);
     strcpy(cfg.path, "/api/websocket");
 
@@ -580,13 +594,6 @@ int main(int argc, char **argv)
     cb.user           = &app;
 
     /* --- bring up the stack --- */
-    if (args.writeicon) {
-        write_icon(argv && argv[0] ? argv[0] : "ami2ha", &args);
-        free_dash(&dash);
-        if (rda) FreeArgs(rda);
-        if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
-        return RETURN_OK;
-    }
 
     rc = net_lib_open();
     if (rc != NET_OK) {

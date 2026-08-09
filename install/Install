@@ -1,0 +1,264 @@
+; ami2ha installer
+;
+; Installer script for the Commodore Installer utility. Run it by
+; double-clicking Install, or from a Shell inside this drawer:
+;
+;   Installer Install
+;
+; It copies the build that matches the processor, writes a starter
+; configuration, and creates the program icon so the result can be
+; double-clicked. Nothing outside the chosen drawer is touched.
+
+(set @app-name "ami2ha")
+
+(set #welcome
+  (cat "ami2ha 0.1\n\n"
+       "A Home Assistant client for AmigaOS.\n\n"
+       "This installs one program, its manual, and a starter\n"
+       "configuration into a drawer of your choosing.\n\n"
+       "You will need a long-lived access token from Home\n"
+       "Assistant. The manual explains where to find it."
+  )
+)
+
+(set #where_prompt "Where should ami2ha be installed?")
+(set #where_help
+  (cat "A drawer called ami2ha will be created here.\n\n"
+       "Everything the program needs lives in that one drawer, so it can "
+       "be moved or deleted later without leaving anything behind.\n\n"
+       @askdir-help
+  )
+)
+
+(set #copy_prompt "Copying the program")
+(set #copy_help
+  (cat "Two builds are supplied. The one matching this machine's "
+       "processor is installed as 'ami2ha'.\n\n"
+       @copyfiles-help
+  )
+)
+
+(set #host_prompt
+  (cat "What is the address of your Home Assistant?\n\n"
+       "An address such as 192.168.1.100 is safest; name lookup\n"
+       "depends on your TCP/IP stack being configured for it."
+  )
+)
+(set #host_help
+  (cat "The machine Home Assistant runs on. If it listens on a port other "
+       "than 8123, add a 'port' line to the configuration file afterwards."
+  )
+)
+
+(set #label_prompt
+  (cat "Which Home Assistant label marks the entities\n"
+       "you want on the Amiga?"
+  )
+)
+(set #label_help
+  (cat "Rather than listing entities by hand, ami2ha can ask Home Assistant "
+       "which ones carry a label, and show those.\n\n"
+       "Create the label in Home Assistant under Settings, then Areas, "
+       "labels & zones, and apply it to the entities you want. You can "
+       "change what the Amiga shows later without touching the Amiga.\n\n"
+       "Leave this empty to choose entities by hand instead."
+  )
+)
+
+(set #token_prompt
+  (cat "Enter your long-lived access token now?\n\n"
+       "It is long, and typing it on an Amiga is no fun. You\n"
+       "can say No and copy the file across afterwards."
+  )
+)
+(set #token_help
+  (cat "The token is what ami2ha logs in with. Create one in Home "
+       "Assistant: click your user name at the bottom left, open the "
+       "Security tab, and look for 'Long-lived access tokens'.\n\n"
+       "It is shown once and never again, so copy it when it appears.\n\n"
+       "It is saved to ha.token in the installation drawer. Anyone who "
+       "can read that file can control your house, so keep it to yourself."
+  )
+)
+(set #token_string "Paste or type the token:")
+
+(welcome #welcome)
+
+
+;; ------------------------------------------------------------------
+;; Where
+;; ------------------------------------------------------------------
+
+(set destparent
+  (askdir
+    (prompt #where_prompt)
+    (help #where_help)
+    (default @default-dest)
+  )
+)
+
+(set destdir (tackon destparent "ami2ha"))
+(makedir destdir (infos))
+(set @default-dest destdir)
+
+;; ------------------------------------------------------------------
+;; The program, matched to the processor
+;; ------------------------------------------------------------------
+
+(set cpu (database "cpu"))
+
+(if (OR (= cpu "68000") (= cpu "68010"))
+  (set binary "ami2ha.000")
+  (set binary "ami2ha.020")
+)
+
+(copyfiles
+  (prompt #copy_prompt)
+  (help #copy_help)
+  (source binary)
+  (dest destdir)
+  (newname "ami2ha")
+)
+
+(copyfiles
+  (prompt "Copying the manual")
+  (help @copyfiles-help)
+  (source "ami2ha.guide")
+  (dest destdir)
+)
+
+;; ------------------------------------------------------------------
+;; A configuration to start from
+;; ------------------------------------------------------------------
+
+(set hostname
+  (askstring
+    (prompt #host_prompt)
+    (help #host_help)
+    (default "192.168.1.100")
+  )
+)
+
+; Novice mode answers every question from its default without ever
+; showing it, and nobody's Home Assistant is at the address we guessed.
+; A wrong address is worse than a missing one: it produces a program that
+; will not connect for a reason that is not visible anywhere. Treat it as
+; unanswered instead, and say so at the end.
+(if (= @user-level 0)
+  (set hostname "")
+)
+
+(set label
+  (askstring
+    (prompt #label_prompt)
+    (help #label_help)
+    (default "amiga")
+  )
+)
+
+(set cfgfile (tackon destdir "ami2ha.cfg"))
+(set tokfile (tackon destdir "ha.token"))
+
+; Build the optional line first: rewriting the file to append to it
+; would mean reading and writing the same file in one breath.
+(set labelline "")
+(if (> (strlen label) 0)
+  (set labelline ("label      %s\n" label))
+)
+
+(set hostline "# host       192.168.1.100   <- put your server's address here\n")
+(if (> (strlen hostname) 0)
+  (set hostline ("host       %s\n" hostname))
+)
+
+(textfile
+  (dest cfgfile)
+  (append "# ami2ha dashboard\n")
+  (append "#\n")
+  (append "# Written by the installer. Editing by hand is fine; saving\n")
+  (append "# from the settings window rewrites this file.\n")
+  (append "\n")
+  (append hostline)
+  (append ("tokenfile  %s\n" tokfile))
+  (append labelline)
+)
+
+;; ------------------------------------------------------------------
+;; The token
+;; ------------------------------------------------------------------
+
+(if (askbool
+      (prompt #token_prompt)
+      (help #token_help)
+      (default 0)
+    )
+  (
+    (set token
+      (askstring
+        (prompt #token_string)
+        (help #token_help)
+        (default "")
+      )
+    )
+    (if (> (strlen token) 0)
+      (
+        (textfile (dest tokfile) (append token))
+        (protect tokfile "rwed")
+      )
+    )
+  )
+)
+
+;; ------------------------------------------------------------------
+;; An icon that can be double-clicked
+;; ------------------------------------------------------------------
+
+(working "Creating the program icon")
+
+(run ("\"%s\" CONFIG=\"%s\" WRITEICON" (tackon destdir "ami2ha") cfgfile))
+
+;; ------------------------------------------------------------------
+;; Done
+;; ------------------------------------------------------------------
+
+(set #next "")
+
+(if (= (strlen hostname) 0)
+  (set #next
+    (cat #next
+         "Open this file in a text editor:\n\n  " cfgfile "\n\n"
+         "and change the commented-out 'host' line to your\n"
+         "Home Assistant's address.\n\n"
+    )
+  )
+)
+
+(if (NOT (exists tokfile))
+  (set #next
+    (cat #next
+         "Put your Home Assistant access token, on a line of\n"
+         "its own, in\n\n  " tokfile "\n\n"
+         "The manual explains where to get one.\n\n"
+    )
+  )
+)
+
+(if (= (strlen #next) 0)
+  (set #done
+    (cat "ami2ha is installed in\n\n  " destdir "\n\n"
+         "Double-click its icon to start.\n\n"
+         "Read ami2ha.guide for what everything does."
+    )
+  )
+  (set #done
+    (cat "ami2ha is installed in\n\n  " destdir "\n\n"
+         "Before it can connect:\n\n"
+         #next
+         "Then double-click its icon. ami2ha.guide has the details."
+    )
+  )
+)
+
+(message #done)
+
+(exit (quiet))

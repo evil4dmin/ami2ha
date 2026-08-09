@@ -20,6 +20,7 @@
 
 #include "ami2ha/json.h"
 #include "ami2ha/ui.h"
+#include "ami2ha/version.h"
 #include "editor.h"
 
 #include <stdio.h>
@@ -68,6 +69,7 @@ static void ui_libs_close(void)
 /* Return IDs. Widget n reports ID_WIDGET_BASE + n. */
 #define ID_QUIT        1
 #define ID_RECONNECT   2
+#define ID_ABOUT       3
 #define ID_WIDGET_BASE 1000
 
 /*
@@ -484,11 +486,11 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
     }
 
     ui->win = MUI_NewObject(MUIC_Window,
-        MUIA_Window_Title,     (IPTR)"ami2ha",
+        MUIA_Window_Title,     (IPTR)A2H_TITLE,
         /* What the Workbench title bar shows while this window is at the
          * front. Set on both windows, or it reverts to Workbench's own
          * text whenever the settings window is the active one. */
-        MUIA_Window_ScreenTitle,(IPTR)"ami2ha",
+        MUIA_Window_ScreenTitle,(IPTR)A2H_TITLE,
         MUIA_Window_ID,        (IPTR)A2H_MAKE_ID('A','2','H','A'),
         MUIA_Window_RootObject,(IPTR)MUI_NewObject(MUIC_Group,
             MUIA_Group_Child, (IPTR)root,
@@ -506,6 +508,11 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
                     MUIA_UserData, (IPTR)ID_ED_OPEN,
                     TAG_DONE),
                 MUIA_Family_Child, (IPTR)MUI_NewObject(MUIC_Menuitem,
+                    MUIA_Menuitem_Title, (IPTR)"About...",
+                    MUIA_Menuitem_Shortcut, (IPTR)"A",
+                    MUIA_UserData, (IPTR)ID_ABOUT,
+                    TAG_DONE),
+                MUIA_Family_Child, (IPTR)MUI_NewObject(MUIC_Menuitem,
                     MUIA_Menuitem_Title, (IPTR)-1,   /* separator bar */
                     TAG_DONE),
                 MUIA_Family_Child, (IPTR)MUI_NewObject(MUIC_Menuitem,
@@ -520,7 +527,7 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
 
     ui->app = MUI_NewObject(MUIC_Application,
         MUIA_Application_Title,      (IPTR)"ami2ha",
-        MUIA_Application_Version,    (IPTR)"$VER: ami2ha 0.1 (2026)",
+        MUIA_Application_Version,    (IPTR)A2H_VERSTAG,
         MUIA_Application_Copyright,  (IPTR)"MIT licensed",
         MUIA_Application_Author,     (IPTR)"ami2ha contributors",
         MUIA_Application_Description,(IPTR)"Home Assistant client",
@@ -769,6 +776,33 @@ static void fire_widget(a2h_ui *ui, int i)
  * Keeping the connection
  * ------------------------------------------------------------------ */
 
+/*
+ * What the program is, and what this copy of it is currently talking to.
+ * The connection details are the part worth having: when something is not
+ * updating, the first question is always which server it is asking.
+ */
+static void show_about(a2h_ui *ui)
+{
+    char text[512];
+
+    sprintf(text,
+        "%s %s\n\n"
+        "A Home Assistant client for AmigaOS.\n"
+        "MIT licensed. https://github.com/evil4dmin/ami2ha\n\n"
+        "Server: %s:%d\n"
+        "Home Assistant: %s\n"
+        "Entities: %lu\n"
+        "ARexx port: %s",
+        A2H_NAME, A2H_VERSION,
+        ui->ha->cfg.host, ui->ha->cfg.port,
+        ui->ha->version[0] ? ui->ha->version : "not connected",
+        (unsigned long)ha_store_count(&ui->ha->store),
+        ui->rexx ? rexx_portname(ui->rexx) : "none");
+
+    MUI_Request(ui->app, ui->win, 0, (char *)A2H_NAME, (char *)"Ok",
+                (char *)"%s", text);
+}
+
 void ui_set_status_connected(a2h_ui *ui)
 {
     char st[96];
@@ -979,6 +1013,11 @@ int ui_run(a2h_ui *ui)
 
         if (id == MUIV_Application_ReturnID_Quit || id == ID_QUIT)
             break;
+
+        if (id == ID_ABOUT) {
+            show_about(ui);
+            continue;
+        }
 
         {
             int relayout = 0;

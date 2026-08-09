@@ -14,6 +14,7 @@
 #include <proto/intuition.h>
 
 #include "ami2ha/cfgfile.h"
+#include "ami2ha/version.h"
 #include "editor.h"
 
 #include <stdio.h>
@@ -536,7 +537,7 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
 
     ed->win = MUI_NewObject(MUIC_Window,
         MUIA_Window_Title,  (IPTR)"ami2ha settings",
-        MUIA_Window_ScreenTitle, (IPTR)"ami2ha",
+        MUIA_Window_ScreenTitle, (IPTR)A2H_TITLE,
         /* Lists need room to be usable; MUI would otherwise shrink the
          * window to the few rows it happens to hold at open time. */
         MUIA_Window_Width,  MUIV_Window_Width_Visible(48),

@@ -1,0 +1,411 @@
+@database ami2ha.guide
+@$VER: ami2ha.guide 0.1 (9.8.2026)
+@author "ami2ha contributors"
+@(c) "MIT licensed"
+@width 76
+@node MAIN "ami2ha 0.1"
+
+@{b}ami2ha 0.1@{ub} -- a Home Assistant client for AmigaOS
+
+  Read your sensors and flip your switches from a real Amiga.
+
+@{" What you need     " link REQUIREMENTS}
+@{" Installing        " link INSTALL}
+@{" The token         " link TOKEN}
+@{" Choosing entities " link LABEL}
+@{" First run         " link FIRSTRUN}
+@{" The dashboard     " link DASHBOARD}
+@{" Settings          " link SETTINGS}
+@{" Starting it       " link STARTING}
+@{" ARexx             " link AREXX}
+@{" When it breaks    " link TROUBLE}
+@{" Credits           " link CREDITS}
+
+@endnode
+
+@node REQUIREMENTS "What you need"
+
+@{b}On the Amiga@{ub}
+
+  AmigaOS 3.0 or newer.
+
+  A TCP/IP stack offering @{b}bsdsocket.library@{ub}. Roadshow, AmiTCP and
+  Miami all work. Under UAE the built-in bsdsocket emulation works, and
+  needs no configuration beyond switching it on.
+
+  @{b}MUI 3.8@{ub} or newer, for the dashboard. The command line modes
+  work without it.
+
+  A 68020 is comfortable. A 68000 build is included and works, but JSON
+  over TCP on a stock A500 is slow.
+
+  Memory follows the size of your @{i}dashboard@{ui}, not the size of your
+  Home Assistant. A dashboard of a dozen entities costs a couple of KB
+  even if the server has two thousand.
+
+@{b}On the Home Assistant side@{ub}
+
+  Any reasonably recent version. You need to be able to log in and reach
+  your profile page, which is where the access token comes from.
+
+  ami2ha talks plain HTTP to the WebSocket API, so the Amiga and Home
+  Assistant should be on the same network. See @{"When it breaks" link TROUBLE}
+  if yours is behind HTTPS.
+
+@endnode
+
+@node INSTALL "Installing"
+
+@{b}With the installer@{ub}
+
+  Double-click @{b}Install@{ub}, or from a Shell:
+
+    Installer Install
+
+  It asks where to put things, copies the build that matches your
+  processor, and creates an icon you can double-click.
+
+@{b}By hand@{ub}
+
+  It is only one program. Copy it wherever you like:
+
+    MakeDir Work:ami2ha
+    Copy ami2ha.020 Work:ami2ha/ami2ha
+    Copy ami2ha.guide Work:ami2ha
+
+  Use @{b}ami2ha@{ub} (the 68000 build) instead if you are not on an
+  020 or better.
+
+  Then read @{"The token" link TOKEN}, which is the part everyone has to
+  do.
+
+@endnode
+
+@node TOKEN "The token"
+
+ami2ha logs in with a @{b}long-lived access token@{ub}. This is a long
+string of letters and digits that Home Assistant generates for you, and
+it stands in for your password.
+
+@{b}Getting one@{ub}
+
+  1. Open Home Assistant in a browser on any machine.
+  2. Click your user name, bottom left.
+  3. Go to the @{b}Security@{ub} tab.
+  4. Scroll to @{b}Long-lived access tokens@{ub} and create one.
+     Call it "amiga" so you can recognise it later.
+  5. Copy the token @{i}now@{ui}. Home Assistant shows it once and never
+     again.
+
+@{b}Putting it on the Amiga@{ub}
+
+  Save it to a file, on its own, with nothing else in it:
+
+    Work:ami2ha/ha.token
+
+  Any text editor will do. Trailing newlines are fine.
+
+@{b}Keep it to yourself@{ub}
+
+  That token can control everything in your house. Treat the file the way
+  you would treat a password:
+
+  - Do not put it on a shared drive or in a public archive.
+  - Do not pass it with the TOKEN argument on the command line, where it
+    would sit in your shell history. Use TOKENFILE, which is what it is
+    for.
+  - It travels over your network in the clear, which is fine on your own
+    LAN and not fine over the internet.
+
+  If it ever leaks, delete it in Home Assistant and make a new one. The
+  old one stops working immediately.
+
+@endnode
+
+@node LABEL "Choosing entities"
+
+A full Home Assistant has hundreds or thousands of entities. You want a
+dozen. There are two ways to say which.
+
+@{b}The easy way: a label@{ub}
+
+  In Home Assistant, create a label called @{b}amiga@{ub} and apply it to
+  the entities you want on the Amiga.
+
+    Settings -> Areas, labels & zones -> Labels -> Create label
+
+  Then open an entity, click the settings cog, and add the label under
+  @{b}Advanced settings@{ub}. Do that for each entity you want.
+
+  Tell ami2ha to use it, and it asks the server which entities carry that
+  label and shows exactly those:
+
+    ami2ha 192.168.1.100 TOKENFILE=Work:ami2ha/ha.token LABEL=amiga
+             WRITECONFIG=Work:ami2ha/dash.cfg
+
+  The nice part is that you can add and remove entities from the Amiga
+  later without touching the Amiga: label something new in Home
+  Assistant, restart ami2ha, and there it is.
+
+@{b}The explicit way: list them@{ub}
+
+  Write the entity ids into the configuration file yourself. See
+  @{"The dashboard" link DASHBOARD} for the format. This suits a fixed
+  display you do not intend to change.
+
+@{b}Finding entity ids@{ub}
+
+  To see what your server offers:
+
+    ami2ha 192.168.1.100 TOKENFILE=Work:ami2ha/ha.token LIST
+
+  Add DOMAIN=switch to narrow it down. Be warned that without a label
+  this fetches everything, which on a large installation is a lot of
+  entities and a lot of memory.
+
+@endnode
+
+@node FIRSTRUN "First run"
+
+Prove the connection works before worrying about the dashboard:
+
+  ami2ha 192.168.1.100 TOKENFILE=Work:ami2ha/ha.token LIST
+
+Use your own server's address. If Home Assistant is on a non-standard
+port, add PORT=8124.
+
+You should get a list of entities. If you do not, go to
+@{"When it breaks" link TROUBLE}.
+
+Now make a dashboard from your labelled entities:
+
+  ami2ha 192.168.1.100 TOKENFILE=Work:ami2ha/ha.token LABEL=amiga
+           WRITECONFIG=Work:ami2ha/dash.cfg
+
+And open it:
+
+  ami2ha CONFIG=Work:ami2ha/dash.cfg GUI
+
+The configuration file remembers the host and the token file, so from
+here on CONFIG and GUI are all you need.
+
+@endnode
+
+@node DASHBOARD "The dashboard"
+
+The window is built from a configuration file. You can edit it in the
+@{"settings window" link SETTINGS} or in a text editor; both write the
+same format.
+
+@{b}The file@{ub}
+
+  host       192.168.1.100
+  port       8123
+  tokenfile  Work:ami2ha/ha.token
+  label      amiga
+
+  group "Living room"
+      sensor sensor.living_room_temperature label "Temperature"
+      gauge  sensor.humidity label "Humidity" min 0 max 100
+      toggle switch.lamp label "Lamp"
+      button script.goodnight label "Goodnight" service script.turn_on
+      text   "Anything you like"
+  end
+
+@{b}What the kinds do@{ub}
+
+  @{b}sensor@{ub}  a reading, with its unit
+  @{b}gauge@{ub}   a reading, as a bar; min and max set the range
+  @{b}toggle@{ub}  a checkmark that switches the entity
+  @{b}button@{ub}  runs a service when clicked
+  @{b}text@{ub}    a caption; shows nothing from the server
+
+@{b}Groups@{ub}
+
+  Every widget lives in a group, and each group is drawn as a titled box.
+  Groups are yours to arrange: they need not match the areas in Home
+  Assistant, and an entity can go wherever it makes sense to you.
+
+@{b}The status line@{ub}
+
+  Along the bottom. Normally the server version and how many entities are
+  loaded. It also reports what the program is doing -- switching
+  something, or trying to reconnect.
+
+@endnode
+
+@node SETTINGS "Settings"
+
+@{b}Project -> Settings@{ub}, or right-Amiga S.
+
+  @{b}Group@{ub}       which group you are editing. New group and Delete
+                group work on this one; Name renames it.
+
+  @{b}Available HA entities@{ub}  everything the server offers that is not
+                on the dashboard yet.
+
+  @{b}Selected entities@{ub}      what the current group shows, in order.
+                Drag to reorder, or use Up and Down.
+
+  @{b}Add and Remove@{ub}  move an entity between the two lists. To move
+                one to a different group: remove it here, switch group
+                above, and add it there. It keeps its label and its
+                settings on the way.
+
+  @{b}Properties@{ub}   the selected entity's label, how it is shown, and
+                the range for a gauge. Changes are kept when you move to
+                another entity; you do not have to press Return.
+
+  @{b}Save@{ub} writes the file and closes. @{b}Use@{ub} applies without
+  writing, so it is gone at the next start. @{b}Cancel@{ub} puts
+  everything back.
+
+@endnode
+
+@node STARTING "Starting it"
+
+@{b}From a Shell@{ub}
+
+  ami2ha CONFIG=Work:ami2ha/dash.cfg GUI
+
+  Add it to your @{b}user-startup@{ub} to have it come up with the
+  machine:
+
+    Run >NIL: Work:ami2ha/ami2ha CONFIG=Work:ami2ha/dash.cfg GUI
+
+@{b}From Workbench@{ub}
+
+  Double-clicking the icon needs the settings in the icon instead of on a
+  command line. ami2ha can write that icon for you:
+
+    ami2ha CONFIG=Work:ami2ha/dash.cfg WRITEICON
+
+  That creates ami2ha.info with the right tool types. From then on
+  double-clicking is enough.
+
+  To change them later, use Workbench's @{b}Information@{ub} on the icon
+  and edit the tool types by hand:
+
+    CONFIG=Work:ami2ha/dash.cfg
+    HOST=192.168.1.100
+    TOKENFILE=Work:ami2ha/ha.token
+
+@{b}Arguments@{ub}
+
+  HOST PORT/N TOKEN/K TOKENFILE/K CONFIG/K WRITECONFIG/K GUI/S LIST/S
+  WATCH/S WRITEICON/S GET/K TOGGLE/K ON/K OFF/K DOMAIN/K TIMEOUT/N/K
+
+@endnode
+
+@node AREXX "ARexx"
+
+ami2ha hosts an ARexx port called @{b}AMI2HA@{ub}, so the rest of your
+Workbench can read your house and control it. A second copy takes
+AMI2HA.1, and so on.
+
+  /* every script must start with a comment */
+  OPTIONS RESULTS
+  ADDRESS AMI2HA
+
+  GET sensor.living_room_temperature
+  SAY 'It is' RESULT 'degrees'
+
+  ON switch.lamp
+  IF RC ~= 0 THEN DO
+      LASTERROR
+      SAY 'failed:' RESULT
+  END
+
+@{b}Commands@{ub}
+
+  GET <id>                  the state, as a string
+  ATTR <id> <attribute>     one attribute
+  LIST [DOMAIN <domain>]    known entity ids, one per line
+  TOGGLE <id>               flip it
+  ON <id> / OFF <id>        set it
+  CALL <domain> <service> [ENTITY <id>] [DATA <json>]
+  STATUS                    connection state, version, entity count
+  COUNT                     how many entities are held
+  LASTERROR                 why the last command failed
+  VERSION                   the ami2ha version
+  QUIT                      close the program
+
+RC is 0 on success, 5 when the request made sense but could not be
+answered, 10 when it did not parse.
+
+ARexx puts unquoted words into upper case, and Home Assistant ids are
+lower case; ami2ha folds them back, so you need not quote ids. Do quote
+the JSON passed to DATA, whose keys are case sensitive.
+
+The full description, including the parts that are still only designed,
+is in AREXX.md in the source archive.
+
+@endnode
+
+@node TROUBLE "When it breaks"
+
+@{b}"cannot open bsdsocket.library"@{ub}
+
+  No TCP/IP stack is running. Start Roadshow, AmiTCP or Miami first.
+  Under UAE, switch on bsdsocket emulation in the configuration.
+
+@{b}"could not connect"@{ub}
+
+  The address or the port is wrong, or the machine cannot be reached.
+  Check with a Ping if you have one. Remember Home Assistant listens on
+  8123 unless you changed it.
+
+  ami2ha keeps trying, waiting a little longer each time up to a minute,
+  and says so in the status line. It does not need restarting when your
+  server comes back.
+
+@{b}"Token rejected"@{ub}
+
+  The token is wrong, expired, or was deleted in Home Assistant. Make a
+  new one -- see @{"The token" link TOKEN}. ami2ha deliberately does
+  @{i}not@{ui} retry this one, because Home Assistant bans an address
+  after repeated failed logins and a retry loop would lock your Amiga
+  out.
+
+@{b}"cannot open muimaster.library"@{ub}
+
+  MUI is not installed. The GUI needs it; LIST, GET, ON, OFF and WATCH do
+  not.
+
+@{b}Readings show a dash@{ub}
+
+  The server reports that entity as unavailable or unknown. That is
+  usually the device, not ami2ha -- check the same entity in Home
+  Assistant.
+
+@{b}HTTPS@{ub}
+
+  Not supported yet. If your Home Assistant is only reachable over
+  HTTPS, ami2ha cannot talk to it. On most home setups the server also
+  answers plain HTTP on port 8123 from inside the network.
+
+@{b}Still stuck@{ub}
+
+  Project -> About shows which server this copy is actually talking to,
+  which answers the first question more often than you would think.
+
+  Bug reports are welcome at
+  https://github.com/evil4dmin/ami2ha/issues
+
+@endnode
+
+@node CREDITS "Credits"
+
+ami2ha is MIT licensed. Do what you like with it.
+
+  https://github.com/evil4dmin/ami2ha
+
+Built with @{b}vbcc@{ub} by Volker Barthelmann, the AmigaOS NDK, and
+@{b}MUI@{ub} by Stefan Stuntz.
+
+Uses the SDI headers, which are public domain.
+
+Home Assistant is a separate project and nothing to do with these
+authors: https://www.home-assistant.io/
+
+@endnode
