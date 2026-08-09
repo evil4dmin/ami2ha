@@ -51,6 +51,17 @@ struct a2h_editor {
 
     const char **group_titles;   /* for the cycle gadget, NULL terminated */
     int          ngroup_titles;
+
+    /*
+     * Settings of widgets that are currently off the dashboard. Moving an
+     * entity to another group means taking it out of one group and adding
+     * it to the next, and between those two steps its widget no longer
+     * exists in the configuration. Without somewhere to keep them, the
+     * label and the chosen kind would be rediscovered from Home Assistant
+     * and the user's choices lost.
+     */
+    a2h_widget *stash;
+    int         nstash;
 };
 
 /* MUI shows a list entry by asking this for the column text. */
@@ -63,6 +74,33 @@ HOOKPROTONH(DisplayFunc, LONG, char **array, ed_row *row)
     return 0;
 }
 MakeStaticHook(DisplayHook, DisplayFunc);
+
+/*
+ * The lists keep their own copy of every row. Without this MUI would hold
+ * the pointer it was handed, which points into the working arrays -- and
+ * those are freed and reallocated whenever the lists are rebuilt or read
+ * back, leaving the lists full of dangling pointers. Entries then come
+ * back with their first few bytes overwritten by the allocator, which
+ * showed up as widgets losing their entity id and label.
+ */
+HOOKPROTONH(ConstructFunc, APTR, APTR pool, ed_row *row)
+{
+    ed_row *copy = (ed_row *)malloc(sizeof *copy);
+
+    A2H_UNUSED(pool);
+    if (copy)
+        *copy = *row;
+    return copy;
+}
+MakeStaticHook(ConstructHook, ConstructFunc);
+
+HOOKPROTONH(DestructFunc, LONG, APTR pool, ed_row *row)
+{
+    A2H_UNUSED(pool);
+    free(row);
+    return 0;
+}
+MakeStaticHook(DestructHook, DestructFunc);
 
 static const char *kind_labels[] = {
     "reading", "toggle", "button", "gauge", "text", NULL
@@ -99,6 +137,36 @@ static void row_fill(ed_row *r, ha_client *ha, const char *entity,
     }
 }
 
+/* Remember what a widget looked like while it sits in the pool. */
+static void stash_put(a2h_editor *ed, const a2h_widget *w)
+{
+    a2h_widget *grown;
+    int         i;
+
+    for (i = 0; i < ed->nstash; i++)
+        if (strcmp(ed->stash[i].entity, w->entity) == 0) {
+            ed->stash[i] = *w;
+            return;
+        }
+
+    grown = (a2h_widget *)realloc(ed->stash,
+                                  (size_t)(ed->nstash + 1) * sizeof *grown);
+    if (!grown)
+        return;   /* out of memory: the settings are lost, nothing worse */
+    ed->stash = grown;
+    ed->stash[ed->nstash++] = *w;
+}
+
+static const a2h_widget *stash_get(const a2h_editor *ed, const char *entity)
+{
+    int i;
+
+    for (i = 0; i < ed->nstash; i++)
+        if (strcmp(ed->stash[i].entity, entity) == 0)
+            return &ed->stash[i];
+    return NULL;
+}
+
 static int entity_is_used(const a2h_config *cfg, const char *entity)
 {
     int i;
@@ -129,9 +197,14 @@ static void build_pool(a2h_editor *ed)
         return;
 
     for (e = ha_store_first(&ed->ha->store); e; e = ha_store_next(e)) {
+        const a2h_widget *kept;
+
         if (entity_is_used(ed->cfg, e->entity_id))
             continue;
-        row_fill(&ed->pool[ed->npool++], ed->ha, e->entity_id, NULL, W_SENSOR);
+        kept = stash_get(ed, e->entity_id);
+        row_fill(&ed->pool[ed->npool++], ed->ha, e->entity_id,
+                 kept ? kept->label : NULL,
+                 kept ? kept->kind  : W_SENSOR);
     }
 }
 
@@ -249,6 +322,22 @@ static int apply_order(a2h_editor *ed)
                  i < grp->first_widget + grp->nwidgets; i++)
                 rebuilt[out++] = cfg->widgets[i];
         } else {
+            /* Whatever is no longer in the list is on its way to another
+             * group, or to the pool; keep its settings either way. */
+            for (i = grp->first_widget;
+                 i < grp->first_widget + grp->nwidgets; i++) {
+                int still = 0;
+
+                for (j = 0; j < ed->nused; j++)
+                    if (strcmp(cfg->widgets[i].entity,
+                               ed->used[j].entity) == 0) {
+                        still = 1;
+                        break;
+                    }
+                if (!still)
+                    stash_put(ed, &cfg->widgets[i]);
+            }
+
             /* The list is the order now; find each row's widget. */
             for (i = 0; i < ed->nused; i++) {
                 int found = -1;
@@ -263,15 +352,24 @@ static int apply_order(a2h_editor *ed)
                 if (found >= 0) {
                     rebuilt[out] = cfg->widgets[found];
                 } else {
-                    /* Added from the pool: infer a sensible widget. */
-                    a2h_config tmp;
-                    cfg_init(&tmp);
-                    if (cfg_add_discovered(&tmp, ed->used[i].entity, NULL)) {
-                        rebuilt[out] = tmp.widgets[0];
-                        row_fill(&ed->used[i], ed->ha, ed->used[i].entity,
-                                 tmp.widgets[0].label, tmp.widgets[0].kind);
+                    const a2h_widget *kept = stash_get(ed, ed->used[i].entity);
+
+                    if (kept) {
+                        /* Came from another group: keep how it was set up. */
+                        rebuilt[out] = *kept;
+                        row_fill(&ed->used[i], ed->ha, kept->entity,
+                                 kept->label, kept->kind);
+                    } else {
+                        /* Genuinely new: infer a sensible widget. */
+                        a2h_config tmp;
+                        cfg_init(&tmp);
+                        if (cfg_add_discovered(&tmp, ed->used[i].entity, NULL)) {
+                            rebuilt[out] = tmp.widgets[0];
+                            row_fill(&ed->used[i], ed->ha, ed->used[i].entity,
+                                     tmp.widgets[0].label, tmp.widgets[0].kind);
+                        }
+                        cfg_free(&tmp);
                     }
-                    cfg_free(&tmp);
                 }
                 rebuilt[out].group = g;
                 out++;
@@ -324,7 +422,9 @@ static Object *make_list(Object **listp, const char *title, int draggable)
 {
     Object *list = MUI_NewObject(MUIC_List,
         MUIA_Frame,            MUIV_Frame_InputList,
-        MUIA_List_DisplayHook, (IPTR)&DisplayHook,
+        MUIA_List_DisplayHook,  (IPTR)&DisplayHook,
+        MUIA_List_ConstructHook,(IPTR)&ConstructHook,
+        MUIA_List_DestructHook, (IPTR)&DestructHook,
         MUIA_List_Title,       (IPTR)title,
         TAG_DONE);
 
@@ -533,6 +633,7 @@ void editor_dispose(a2h_editor *ed)
         return;
     free(ed->pool);
     free(ed->used);
+    free(ed->stash);
     free(ed->group_titles);
     cfg_free(&ed->backup);
     free(ed);
@@ -542,6 +643,12 @@ void editor_show(a2h_editor *ed)
 {
     if (!ed)
         return;
+
+    /* A fresh session starts with nothing held back, so a label from a
+     * run the user cancelled cannot come back on an entity they re-add. */
+    free(ed->stash);
+    ed->stash  = NULL;
+    ed->nstash = 0;
 
     /* Keep a copy so Cancel can put everything back. */
     cfg_free(&ed->backup);
@@ -620,6 +727,8 @@ static void group_new(a2h_editor *ed)
     if (cfg->ngroups >= CFG_MAX_GROUPS)
         return;
 
+    apply(ed);   /* keep the edits to the group we are leaving */
+
     g = &cfg->groups[cfg->ngroups];
     memset(g, 0, sizeof *g);
     sprintf(g->title, "Group %d", cfg->ngroups + 1);
@@ -641,9 +750,15 @@ static void group_delete(a2h_editor *ed)
     if (cfg->ngroups == 0 || ed->group < 0 || ed->group >= cfg->ngroups)
         return;
 
+    apply(ed);   /* keep the edits to the group we are leaving */
+
     g = &cfg->groups[ed->group];
 
-    /* Drop its widgets; they return to the pool by simply not being used. */
+    /* Its widgets go back to the pool by simply not being used, but keep
+     * their settings so putting one in another group does not reset it. */
+    for (i = g->first_widget; i < g->first_widget + g->nwidgets; i++)
+        stash_put(ed, &cfg->widgets[i]);
+
     for (i = g->first_widget + g->nwidgets; i < cfg->nwidgets; i++)
         cfg->widgets[i - g->nwidgets] = cfg->widgets[i];
     cfg->nwidgets -= g->nwidgets;
