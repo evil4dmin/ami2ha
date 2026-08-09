@@ -176,7 +176,6 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
 {
     const a2h_widget *w  = &ui->cfg->widgets[index];
     ui_widget        *uw = &ui->widgets[index];
-    Object           *row = NULL;
 
     uw->value   = NULL;
     uw->control = NULL;
@@ -184,11 +183,14 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
 
     switch (w->kind) {
     case W_TEXT:
-        row = MUI_NewObject(MUIC_Text,
+        /* A caption spans the row: the second cell is an empty spacer. */
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)MUI_NewObject(MUIC_Text,
             MUIA_Text_Contents, (IPTR)w->label,
-            MUIA_Text_PreParse, (IPTR)"\33c\33b",
-            TAG_DONE);
-        break;
+            MUIA_Text_PreParse, (IPTR)"\33l\33b",
+            TAG_DONE));
+        DoMethod(parent, OM_ADDMEMBER,
+                 (IPTR)MUI_NewObject(MUIC_Rectangle, TAG_DONE));
+        return 1;
 
     case W_SENSOR:
         /*
@@ -205,12 +207,9 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             TAG_DONE);
         if (!uw->value)
             return 0;
-        row = MUI_NewObject(MUIC_Group,
-            MUIA_Group_Horiz,  TRUE,
-            MUIA_Group_Child,  (IPTR)make_label(w->label),
-            MUIA_Group_Child,  (IPTR)uw->value,
-            TAG_DONE);
-        break;
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)uw->value);
+        return 1;
 
     case W_GAUGE:
         uw->value = MUI_NewObject(MUIC_Gauge,
@@ -223,12 +222,9 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             TAG_DONE);
         if (!uw->value)
             return 0;
-        row = MUI_NewObject(MUIC_Group,
-            MUIA_Group_Horiz,  TRUE,
-            MUIA_Group_Child,  (IPTR)make_label(w->label),
-            MUIA_Group_Child,  (IPTR)uw->value,
-            TAG_DONE);
-        break;
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)uw->value);
+        return 1;
 
     case W_TOGGLE:
         uw->control = MUI_NewObject(MUIC_Image,
@@ -240,12 +236,14 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             TAG_DONE);
         if (!uw->control)
             return 0;
-        row = MUI_NewObject(MUIC_Group,
-            MUIA_Group_Horiz,  TRUE,
-            MUIA_Group_Child,  (IPTR)make_label(w->label),
-            MUIA_Group_Child,  (IPTR)uw->control,
-            TAG_DONE);
-        break;
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
+        /* Keep the checkmark its natural size rather than stretched. */
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)MUI_NewObject(MUIC_Group,
+            MUIA_Group_Horiz, TRUE,
+            MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Rectangle, TAG_DONE),
+            MUIA_Group_Child, (IPTR)uw->control,
+            TAG_DONE));
+        return 1;
 
     case W_BUTTON:
         uw->control = MUI_NewObject(MUIC_Text,
@@ -257,15 +255,13 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             TAG_DONE);
         if (!uw->control)
             return 0;
-        row = uw->control;
-        break;
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)uw->control);
+        DoMethod(parent, OM_ADDMEMBER,
+                 (IPTR)MUI_NewObject(MUIC_Rectangle, TAG_DONE));
+        return 1;
     }
 
-    if (!row)
-        return 0;
-
-    DoMethod(parent, OM_ADDMEMBER, (IPTR)row);
-    return 1;
+    return 0;
 }
 
 /* Create one framed box per configured group and fill it with widgets. */
@@ -277,10 +273,23 @@ static void build_groups(a2h_ui *ui)
         const a2h_group *grp = &ui->cfg->groups[g];
         Object          *box;
 
+        /* A group with nothing in it would draw as a small empty framed
+         * box. The settings window can leave those behind, so skip them. */
+        if (grp->nwidgets <= 0)
+            continue;
+
+        /*
+         * Two columns, with the label and the value added as separate
+         * children. Wrapping each row in its own horizontal group instead
+         * makes MUI lay every row out independently, so the value fields
+         * start wherever that row's label happens to end and the column
+         * comes out ragged.
+         */
         box = MUI_NewObject(MUIC_Group,
-            MUIA_Frame,      MUIV_Frame_Group,
-            MUIA_FrameTitle, (IPTR)grp->title,
-            MUIA_Background, MUII_GroupBack,
+            MUIA_Group_Columns, (IPTR)2,
+            MUIA_Frame,         MUIV_Frame_Group,
+            MUIA_FrameTitle,    (IPTR)grp->title,
+            MUIA_Background,    MUII_GroupBack,
             TAG_DONE);
         if (!box)
             continue;
@@ -389,6 +398,7 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
         MUIA_Text_Contents, (IPTR)ui->status_text,
         MUIA_Text_PreParse, (IPTR)"\33l",
         MUIA_Frame,         MUIV_Frame_Text,
+        MUIA_Background,    MUII_TextBack,
         TAG_DONE);
 
     /* An empty group to hang the configured groups off; children are added
