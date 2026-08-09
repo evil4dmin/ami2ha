@@ -418,21 +418,21 @@ static void read_back_order(a2h_editor *ed)
  * Construction
  * ------------------------------------------------------------------ */
 
-static Object *make_list(Object **listp, const char *title, int draggable)
+static Object *make_list(Object **listp, const char *heading, int draggable)
 {
+    Object *view;
     Object *list = MUI_NewObject(MUIC_List,
-        MUIA_Frame,            MUIV_Frame_InputList,
+        MUIA_Frame,             MUIV_Frame_InputList,
         MUIA_List_DisplayHook,  (IPTR)&DisplayHook,
         MUIA_List_ConstructHook,(IPTR)&ConstructHook,
         MUIA_List_DestructHook, (IPTR)&DestructHook,
-        MUIA_List_Title,       (IPTR)title,
         TAG_DONE);
 
     *listp = list;
     if (!list)
         return NULL;
 
-    return MUI_NewObject(MUIC_Listview,
+    view = MUI_NewObject(MUIC_Listview,
         MUIA_Listview_List,     (IPTR)list,
         /* Without a floor MUI shrinks the window to whatever the list
          * happens to hold, which is unusable for reordering. */
@@ -441,6 +441,24 @@ static Object *make_list(Object **listp, const char *title, int draggable)
          * list; MUI does the moving itself. */
         MUIA_Listview_DragType, draggable ? MUIV_Listview_DragType_Immediate
                                           : MUIV_Listview_DragType_None,
+        TAG_DONE);
+    if (!view)
+        return NULL;
+
+    /*
+     * The heading goes above the list rather than in it. MUIA_List_Title
+     * draws inside the list frame in the same style as the entries, so it
+     * read as one of them -- as though "Available" were an entity you
+     * could select. VertWeight 0 keeps it at one line high; without it the
+     * heading and the list would share the height between them.
+     */
+    return MUI_NewObject(MUIC_Group,
+        MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+            MUIA_Text_Contents, (IPTR)heading,
+            MUIA_Text_PreParse, (IPTR)"\33c\33b",
+            MUIA_VertWeight,    (IPTR)0,
+            TAG_DONE),
+        MUIA_Group_Child, (IPTR)view,
         TAG_DONE);
 }
 
@@ -501,8 +519,8 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
     ed->bt_use    = make_button("Use");
     ed->bt_cancel = make_button("Cancel");
 
-    ed->lv_pool = make_list(&ed->list_pool, "Available", 0);
-    ed->lv_used = make_list(&ed->list_used, "Dashboard", 1);
+    ed->lv_pool = make_list(&ed->list_pool, "Available HA entities", 0);
+    ed->lv_used = make_list(&ed->list_used, "Selected entities", 1);
 
     if (!ed->lv_pool || !ed->lv_used || !ed->cyc_group) {
         free(ed);
