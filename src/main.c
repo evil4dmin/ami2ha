@@ -82,11 +82,24 @@ static void cb_discovered(ha_client *c, const char *const *ids, int n,
     if (!a->dash)
         return;
 
-    for (i = 0; i < n; i++)
-        cfg_add_discovered(a->dash, ids[i], a->dash->label);
-
     printf("ami2ha: label '%s' selected %d entit%s\n",
            a->dash->label, n, n == 1 ? "y" : "ies");
+
+    /*
+     * The label says which entities are available; it does not dictate the
+     * layout. Once a dashboard has been arranged and saved, that
+     * arrangement wins -- otherwise every start would shuffle the widgets
+     * back into whatever order Home Assistant happened to report, quietly
+     * undoing the user's work.
+     *
+     * Only build a default layout when there is none, which is the first
+     * run after adding the label.
+     */
+    if (a->dash->nwidgets > 0)
+        return;
+
+    for (i = 0; i < n; i++)
+        cfg_add_discovered(a->dash, ids[i], a->dash->label);
 }
 
 static void cb_ready(ha_client *c, void *user)
@@ -540,7 +553,9 @@ int main(int argc, char **argv)
             goto cleanup;
         }
 
-        app.ui = ui_create(dash, &app.ha, &app.sock, uierr, sizeof uierr);
+        app.ui = ui_create(dash, &app.ha, &app.sock,
+                           args.config ? (const char *)args.config : "",
+                           uierr, sizeof uierr);
         if (app.ui) {
             char st[96];
             ui_set_rexx(app.ui, app.rexx);

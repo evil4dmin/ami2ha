@@ -132,6 +132,10 @@ ami2ha CONFIG=S:ami2ha.cfg GUI
 Widget kinds are `sensor`, `toggle`, `gauge`, `button` and `text`. See
 [examples/dashboard.cfg](examples/dashboard.cfg) for a worked example.
 
+You do not have to edit the file, though: **Project → Settings…** opens a
+window where you pick which of the available entities appear, put them in
+groups, order them, and choose how each is shown. Save writes the file back.
+
 ### Or choose the entities in Home Assistant
 
 Rather than listing them, tag entities with a label in Home Assistant and
@@ -202,7 +206,8 @@ back. See [docs/AREXX.md](docs/AREXX.md) for the full command set.
 - [x] Dashboard configuration format, parser and generator
 - [x] MUI dashboard: sensors, gauges, toggles, buttons, live updates
 - [x] Choose entities from within Home Assistant, by label
-- [ ] In-app dashboard editor
+- [x] Settings window: groups, choose entities, reorder, save
+- [ ] Drag-and-drop reordering (needs a List subclass; Up/Down works today)
 - [ ] Reconnect handling and connection status UI
 - [x] ARexx host port
 - [ ] Optional AmiSSL support

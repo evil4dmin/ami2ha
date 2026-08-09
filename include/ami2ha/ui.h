@@ -20,7 +20,7 @@ typedef struct a2h_ui a2h_ui;
  * borrowed, not owned. Returns NULL on failure, with a reason in `err`.
  */
 a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
-                  char *err, size_t errsz);
+                  const char *cfgpath, char *err, size_t errsz);
 
 void ui_dispose(a2h_ui *ui);
 
@@ -41,5 +41,8 @@ void ui_set_status(a2h_ui *ui, const char *text);
 
 /* Refresh every widget from the store, e.g. after the initial load. */
 void ui_refresh_all(a2h_ui *ui);
+
+/* Rebuild the window's contents after the settings window changed them. */
+void ui_rebuild(a2h_ui *ui);
 
 #endif /* AMI2HA_UI_H */

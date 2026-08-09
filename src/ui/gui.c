@@ -19,6 +19,7 @@
 
 #include "ami2ha/json.h"
 #include "ami2ha/ui.h"
+#include "editor.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -88,6 +89,10 @@ struct a2h_ui {
     int         nwidgets;
 
     a2h_rexx   *rexx;   /* borrowed; may be NULL */
+    Object     *root;   /* holds the group boxes; rebuilt by the editor */
+    Object     *menu;
+    a2h_editor *editor;
+    char        cfgpath[CFG_PATH_MAX];
 
     int         quit;
 };
@@ -263,8 +268,86 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
     return 1;
 }
 
+/* Create one framed box per configured group and fill it with widgets. */
+static void build_groups(a2h_ui *ui)
+{
+    int g, i;
+
+    for (g = 0; g < ui->cfg->ngroups; g++) {
+        const a2h_group *grp = &ui->cfg->groups[g];
+        Object          *box;
+
+        box = MUI_NewObject(MUIC_Group,
+            MUIA_Frame,      MUIV_Frame_Group,
+            MUIA_FrameTitle, (IPTR)grp->title,
+            MUIA_Background, MUII_GroupBack,
+            TAG_DONE);
+        if (!box)
+            continue;
+
+        for (i = grp->first_widget;
+             i < grp->first_widget + grp->nwidgets && i < ui->nwidgets; i++)
+            build_widget(ui, i, box);
+
+        DoMethod(ui->root, OM_ADDMEMBER, (IPTR)box);
+    }
+}
+
+/*
+ * Replace the window's contents after the settings window changed them.
+ * MUI allows a group's children to be swapped while the window is open,
+ * provided the change is bracketed by InitChange/ExitChange.
+ */
+void ui_rebuild(a2h_ui *ui)
+{
+    struct MinList *children;
+    Object         *child;
+    APTR            state;
+
+    if (!ui || !ui->root)
+        return;
+
+    DoMethod(ui->root, MUIM_Group_InitChange);
+
+    children = NULL;
+    get(ui->root, MUIA_Group_ChildList, &children);
+    if (children) {
+        /* Collect first: removing while iterating the live list is unsafe. */
+        Object *doomed[CFG_MAX_GROUPS + 4];
+        int     n = 0;
+
+        state = children->mlh_Head;
+        while ((child = NextObject(&state)) != NULL &&
+               n < (int)A2H_ARRAY_LEN(doomed))
+            doomed[n++] = child;
+
+        while (n-- > 0) {
+            DoMethod(ui->root, OM_REMMEMBER, (IPTR)doomed[n]);
+            MUI_DisposeObject(doomed[n]);
+        }
+    }
+
+    /* The widget table is indexed by configuration order, so it has to grow
+     * with it. */
+    {
+        int want = ui->cfg->nwidgets > 0 ? ui->cfg->nwidgets : 1;
+        ui_widget *grown = (ui_widget *)calloc((size_t)want, sizeof *grown);
+        if (grown) {
+            free(ui->widgets);
+            ui->widgets  = grown;
+            ui->nwidgets = ui->cfg->nwidgets;
+        }
+    }
+
+    build_groups(ui);
+
+    DoMethod(ui->root, MUIM_Group_ExitChange);
+
+    ui_refresh_all(ui);
+}
+
 a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
-                  char *err, size_t errsz)
+                  const char *cfgpath, char *err, size_t errsz)
 {
     a2h_ui *ui;
     Object *root;
@@ -287,6 +370,8 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
     ui->cfg  = cfg;
     ui->ha   = ha;
     ui->sock = sock;
+    if (cfgpath)
+        strncpy(ui->cfgpath, cfgpath, sizeof ui->cfgpath - 1);
 
     ui->nwidgets = cfg->nwidgets;
     ui->widgets  = (ui_widget *)calloc((size_t)(cfg->nwidgets > 0 ? cfg->nwidgets : 1),
@@ -311,6 +396,7 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
     root = MUI_NewObject(MUIC_Group,
         MUIA_Group_Columns, (IPTR)cfg->columns,
         TAG_DONE);
+    ui->root = root;
 
     if (!root || !ui->status) {
         strncpy(err, "could not create MUI objects", errsz - 1);
@@ -320,23 +406,7 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
         return NULL;
     }
 
-    for (g = 0; g < cfg->ngroups; g++) {
-        const a2h_group *grp = &cfg->groups[g];
-        Object          *box;
-
-        box = MUI_NewObject(MUIC_Group,
-            MUIA_Frame,      MUIV_Frame_Group,
-            MUIA_FrameTitle, (IPTR)grp->title,
-            MUIA_Background, MUII_GroupBack,
-            TAG_DONE);
-        if (!box)
-            continue;
-
-        for (i = grp->first_widget; i < grp->first_widget + grp->nwidgets; i++)
-            build_widget(ui, i, box);
-
-        DoMethod(root, OM_ADDMEMBER, (IPTR)box);
-    }
+    build_groups(ui);
 
     ui->win = MUI_NewObject(MUIC_Window,
         MUIA_Window_Title,     (IPTR)"ami2ha",
@@ -347,6 +417,28 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
             TAG_DONE),
         TAG_DONE);
 
+    {
+        Object *menu = MUI_NewObject(MUIC_Menustrip,
+            MUIA_Family_Child, (IPTR)MUI_NewObject(MUIC_Menu,
+                MUIA_Menu_Title, (IPTR)"Project",
+                MUIA_Family_Child, (IPTR)MUI_NewObject(MUIC_Menuitem,
+                    MUIA_Menuitem_Title, (IPTR)"Settings...",
+                    MUIA_Menuitem_Shortcut, (IPTR)"S",
+                    MUIA_UserData, (IPTR)ID_ED_OPEN,
+                    TAG_DONE),
+                MUIA_Family_Child, (IPTR)MUI_NewObject(MUIC_Menuitem,
+                    MUIA_Menuitem_Title, (IPTR)-1,   /* separator bar */
+                    TAG_DONE),
+                MUIA_Family_Child, (IPTR)MUI_NewObject(MUIC_Menuitem,
+                    MUIA_Menuitem_Title, (IPTR)"Quit",
+                    MUIA_Menuitem_Shortcut, (IPTR)"Q",
+                    MUIA_UserData, (IPTR)ID_QUIT,
+                    TAG_DONE),
+                TAG_DONE),
+            TAG_DONE);
+        ui->menu = menu;
+    }
+
     ui->app = MUI_NewObject(MUIC_Application,
         MUIA_Application_Title,      (IPTR)"ami2ha",
         MUIA_Application_Version,    (IPTR)"$VER: ami2ha 0.1 (2026)",
@@ -354,6 +446,7 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
         MUIA_Application_Author,     (IPTR)"ami2ha contributors",
         MUIA_Application_Description,(IPTR)"Home Assistant client",
         MUIA_Application_Base,       (IPTR)"AMI2HA",
+        MUIA_Application_Menustrip,  (IPTR)ui->menu,
         MUIA_Application_Window,     (IPTR)ui->win,
         TAG_DONE);
 
@@ -388,6 +481,8 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
                      MUIM_Application_ReturnID, ID_WIDGET_BASE + i);
     }
 
+    ui->editor = editor_create(ui->app, cfg, ha, ui->cfgpath);
+
     set(ui->win, MUIA_Window_Open, TRUE);
     if (!xget(ui->win, MUIA_Window_Open)) {
         strncpy(err, "could not open the window", errsz - 1);
@@ -412,6 +507,8 @@ void ui_dispose(a2h_ui *ui)
 {
     if (!ui)
         return;
+    editor_dispose(ui->editor);
+    ui->editor = NULL;
     if (ui->app) {
         set(ui->win, MUIA_Window_Open, FALSE);
         MUI_DisposeObject(ui->app);
@@ -606,6 +703,15 @@ int ui_run(a2h_ui *ui)
 
         if (id == MUIV_Application_ReturnID_Quit || id == ID_QUIT)
             break;
+
+        {
+            int relayout = 0;
+            if (editor_handle(ui->editor, id, &relayout)) {
+                if (relayout)
+                    ui_rebuild(ui);
+                continue;
+            }
+        }
 
         if (id >= ID_WIDGET_BASE) {
             fire_widget(ui, (int)(id - ID_WIDGET_BASE));
