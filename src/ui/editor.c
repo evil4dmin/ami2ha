@@ -529,6 +529,7 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
 
     ed->win = MUI_NewObject(MUIC_Window,
         MUIA_Window_Title,  (IPTR)"ami2ha settings",
+        MUIA_Window_ScreenTitle, (IPTR)"ami2ha",
         /* Lists need room to be usable; MUI would otherwise shrink the
          * window to the few rows it happens to hold at open time. */
         MUIA_Window_Width,  MUIV_Window_Width_Visible(48),
@@ -572,7 +573,7 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
                 MUIA_Group_Horiz, TRUE,
                 MUIA_Frame,       MUIV_Frame_Group,
-                MUIA_FrameTitle,  (IPTR)"Selected entity",
+                MUIA_FrameTitle,  (IPTR)"Properties",
                 MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
                     MUIA_Text_Contents, (IPTR)"Label:",
                     MUIA_Weight, (IPTR)0, TAG_DONE),

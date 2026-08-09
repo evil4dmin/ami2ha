@@ -461,6 +461,10 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
 
     ui->win = MUI_NewObject(MUIC_Window,
         MUIA_Window_Title,     (IPTR)"ami2ha",
+        /* What the Workbench title bar shows while this window is at the
+         * front. Set on both windows, or it reverts to Workbench's own
+         * text whenever the settings window is the active one. */
+        MUIA_Window_ScreenTitle,(IPTR)"ami2ha",
         MUIA_Window_ID,        (IPTR)A2H_MAKE_ID('A','2','H','A'),
         MUIA_Window_RootObject,(IPTR)MUI_NewObject(MUIC_Group,
             MUIA_Group_Child, (IPTR)root,
