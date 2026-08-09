@@ -317,6 +317,11 @@ int main(int argc, char **argv)
      * line to parse.
      */
     A2H_UNUSED(argv);
+    if (argc == 0) {
+        /* Started from Workbench: there is no console to print to, and
+         * nothing sensible to do without a configuration. */
+        return RETURN_WARN;
+    }
     if (argc < 2) {
         usage();
         return RETURN_WARN;
