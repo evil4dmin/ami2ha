@@ -16,7 +16,7 @@
 ; ends up half-hidden behind it. Everything else belongs in the help
 ; text and the closing message.
 (set #welcome
-  (cat "ami2ha 0.1 -- a Home Assistant client for AmigaOS.\n\n"
+  (cat "ami2ha @VERSION@ -- a Home Assistant client for AmigaOS.\n\n"
        "Installs the program and its manual into a drawer\n"
        "you choose."
   )
@@ -99,6 +99,18 @@
 )
 
 (set destdir (tackon destparent "ami2ha"))
+
+; Unpacking into Work: gives Work:ami2ha, and Work: is also what the
+; default destination offers -- so the obvious thing a Novice user does
+; lands the installation on top of the archive it came from. Rather than
+; refuse, notice it: everything is already in the right place, so the
+; copies are simply skipped and the rest of the job carries on.
+; ami2ha.000 only ever exists in the archive, so it is a reliable sign.
+(set inplace 0)
+(if (exists (tackon destdir "ami2ha.000"))
+  (set inplace 1)
+)
+
 (makedir destdir (infos))
 (set @default-dest destdir)
 
@@ -121,21 +133,37 @@
   (newname "ami2ha")
 )
 
-(copyfiles
-  (prompt "Copying the manual")
-  (help @copyfiles-help)
-  (source "ami2ha.guide")
-  (dest destdir)
+; Skipped when installing in place: these keep their names, so copying
+; them would mean copying a file onto itself.
+(if (= inplace 0)
+  (
+    (copyfiles
+      (prompt "Copying the manual")
+      (help @copyfiles-help)
+      (source "ami2ha.guide")
+      (dest destdir)
+    )
+
+    ; The program's icon. WRITEICON below keeps an existing icon and only
+    ; rewrites its tool types, so putting this in place first means the
+    ; artwork survives rather than being replaced by a default one.
+    (copyfiles
+      (prompt "Copying the icon")
+      (help @copyfiles-help)
+      (source "icons/ami2ha.info")
+      (dest destdir)
+    )
+  )
 )
 
-; The program's icon. WRITEICON below keeps an existing icon and only
-; rewrites its tool types, so putting this in place first means the
-; artwork survives rather than being replaced by a default one.
-(copyfiles
-  (prompt "Copying the icon")
-  (help @copyfiles-help)
-  (source "icons/ami2ha.info")
-  (dest destdir)
+; In place, the icon is still sitting in icons/ where the archive put it.
+(if (= inplace 1)
+  (copyfiles
+    (prompt "Putting the icon in place")
+    (help @copyfiles-help)
+    (source "icons/ami2ha.info")
+    (dest destdir)
+  )
 )
 
 ;; ------------------------------------------------------------------

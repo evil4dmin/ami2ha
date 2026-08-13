@@ -105,7 +105,8 @@ dist:
 	@$(MAKE) --no-print-directory clean >/dev/null
 	@$(MAKE) --no-print-directory CPU=68020 >/dev/null
 	@cp $(TARGET) $(DISTDIR)/ami2ha/ami2ha.020
-	@cp install/Install       $(DISTDIR)/ami2ha/
+	@sed -e 's/@VERSION@/$(VERSION)/g' install/Install.tmpl \
+	     > $(DISTDIR)/ami2ha/Install
 	@cp install/ami2ha.guide  $(DISTDIR)/ami2ha/
 	@# Icons. The drawer icon sits beside the drawer, not in it, or
 	@# Workbench has nothing to show once the archive is unpacked. The
