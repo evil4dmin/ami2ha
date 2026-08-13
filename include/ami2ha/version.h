@@ -9,8 +9,8 @@
 #define AMI2HA_VERSION_H
 
 #define A2H_NAME         "ami2ha"
-#define A2H_VERSION      "0.1"
-#define A2H_VERSION_DATE "9.8.2026"
+#define A2H_VERSION      "0.1.1"
+#define A2H_VERSION_DATE "13.8.2026"
 
 #define A2H_TITLE        A2H_NAME " " A2H_VERSION
 
