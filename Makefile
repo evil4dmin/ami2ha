@@ -67,6 +67,8 @@ endif
 # comment, which would swallow the rest of the line.
 VERSION     := $(shell awk '$$2 == "A2H_VERSION" { gsub(/"/, "", $$3); print $$3 }' \
                        include/ami2ha/version.h)
+VERSION_DATE := $(shell awk '$$2 == "A2H_VERSION_DATE" { gsub(/"/, "", $$3); print $$3 }' \
+                       include/ami2ha/version.h)
 DISTNAME    := ami2ha-$(VERSION)
 DISTDIR     := dist/$(DISTNAME)
 DISTLHA     := dist/$(DISTNAME).lha
@@ -107,7 +109,8 @@ dist:
 	@cp $(TARGET) $(DISTDIR)/ami2ha/ami2ha.020
 	@sed -e 's/@VERSION@/$(VERSION)/g' install/Install.tmpl \
 	     > $(DISTDIR)/ami2ha/Install
-	@cp install/ami2ha.guide  $(DISTDIR)/ami2ha/
+	@sed -e 's/@VERSION@/$(VERSION)/g' -e 's/@VERSION_DATE@/$(VERSION_DATE)/g' \
+	     install/ami2ha.guide.tmpl > $(DISTDIR)/ami2ha/ami2ha.guide
 	@# Icons. The drawer icon sits beside the drawer, not in it, or
 	@# Workbench has nothing to show once the archive is unpacked. The
 	@# program's own icon waits in icons/ until the installer places it;
