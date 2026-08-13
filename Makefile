@@ -98,7 +98,7 @@ test:
 dist:
 	@test -n "$(VERSION)" || { echo "cannot read version"; exit 1; }
 	@rm -rf $(DISTDIR) $(DISTLHA)
-	@mkdir -p $(DISTDIR)/ami2ha
+	@mkdir -p $(DISTDIR)/ami2ha/icons
 	@$(MAKE) --no-print-directory clean >/dev/null
 	@$(MAKE) --no-print-directory CPU=68000 >/dev/null
 	@cp $(TARGET) $(DISTDIR)/ami2ha/ami2ha.000
@@ -107,6 +107,14 @@ dist:
 	@cp $(TARGET) $(DISTDIR)/ami2ha/ami2ha.020
 	@cp install/Install       $(DISTDIR)/ami2ha/
 	@cp install/ami2ha.guide  $(DISTDIR)/ami2ha/
+	@# Icons. The drawer icon sits beside the drawer, not in it, or
+	@# Workbench has nothing to show once the archive is unpacked. The
+	@# program's own icon waits in icons/ until the installer places it;
+	@# left loose it would show as an icon with no program behind it.
+	@python3 install/icon/mkinfo.py $(DISTDIR)/ami2ha/icons >/dev/null
+	@mv $(DISTDIR)/ami2ha/icons/Install_project.info $(DISTDIR)/ami2ha/Install.info
+	@mv $(DISTDIR)/ami2ha/icons/ami2ha_drawer.info   $(DISTDIR)/ami2ha.info
+	@mv $(DISTDIR)/ami2ha/icons/ami2ha_tool.info     $(DISTDIR)/ami2ha/icons/ami2ha.info
 	@cp LICENSE               $(DISTDIR)/ami2ha/LICENSE
 	@cp examples/dashboard.cfg $(DISTDIR)/ami2ha/dashboard.cfg.example
 	@sed -e 's/@VERSION@/$(VERSION)/g' install/ReadMe.tmpl \
@@ -118,7 +126,7 @@ dist:
 	@sed -e 's/@VERSION@/$(VERSION)/g' install/aminet.readme.tmpl \
 	     > dist/$(DISTNAME).readme
 	@if command -v lha >/dev/null 2>&1 && \
-	    (cd $(DISTDIR) && lha -aq2 ../$(DISTNAME).lha ami2ha >/dev/null 2>&1) && \
+	    (cd $(DISTDIR) && lha -aq2 ../$(DISTNAME).lha ami2ha ami2ha.info >/dev/null 2>&1) && \
 	    test -f $(DISTLHA); then \
 	  echo "built $(DISTLHA)"; \
 	else \
@@ -127,7 +135,7 @@ dist:
 	  echo "No archiver that can *create* LhA archives was found."; \
 	  echo "The lha in Homebrew is Lhasa, which only extracts."; \
 	  echo "Pack it on the Amiga instead:"; \
-	  echo "    LhA -r a ami2ha-$(VERSION).lha ami2ha"; \
+	  echo "    LhA -r a ami2ha-$(VERSION).lha ami2ha ami2ha.info"; \
 	fi
 
 clean:

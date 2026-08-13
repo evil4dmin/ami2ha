@@ -128,6 +128,16 @@
   (dest destdir)
 )
 
+; The program's icon. WRITEICON below keeps an existing icon and only
+; rewrites its tool types, so putting this in place first means the
+; artwork survives rather than being replaced by a default one.
+(copyfiles
+  (prompt "Copying the icon")
+  (help @copyfiles-help)
+  (source "icons/ami2ha.info")
+  (dest destdir)
+)
+
 ;; ------------------------------------------------------------------
 ;; A configuration to start from
 ;; ------------------------------------------------------------------

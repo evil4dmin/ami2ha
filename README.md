@@ -15,11 +15,16 @@ ARexx port so the rest of your Workbench can join in.
 
 ## Try it
 
-Grab the release archive, unpack it, and double-click `Install`:
+Grab the release archive, unpack it, and double-click the `Install` icon:
 
 ```
-lha x ami2ha-0.1.lha
+lha x ami2ha-0.1.1.lha
 ```
+
+From a Shell the Installer has to be named in full, since it isn't on the
+command path: `SYS:System/Installer Install`. Or skip it entirely — it's one
+program, so copying `ami2ha.020` (or `ami2ha.000` on a 68000) where you want
+it works just as well.
 
 You will need a long-lived access token from Home Assistant — click your
 user name at the bottom left, open the **Security** tab, and create one

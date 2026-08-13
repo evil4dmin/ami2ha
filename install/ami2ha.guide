@@ -14,6 +14,7 @@
 @{" The token         " link TOKEN}
 @{" Choosing entities " link LABEL}
 @{" First run         " link FIRSTRUN}
+@{" A worked example  " link EXAMPLE}
 @{" The dashboard     " link DASHBOARD}
 @{" Settings          " link SETTINGS}
 @{" Starting it       " link STARTING}
@@ -58,9 +59,14 @@
 
 @{b}With the installer@{ub}
 
-  Double-click @{b}Install@{ub}, or from a Shell:
+  Double-click the @{b}Install@{ub} icon.
 
-    Installer Install
+  From a Shell you have to name the Installer in full, because it is not
+  on the command path:
+
+    SYS:System/Installer Install
+
+  On AmigaOS 3.1 and earlier it lives in @{b}SYS:Utilities@{ub} instead.
 
   It asks where to put things, copies the build that matches your
   processor, and creates an icon you can double-click.
@@ -72,6 +78,7 @@
     MakeDir Work:ami2ha
     Copy ami2ha.020 Work:ami2ha/ami2ha
     Copy ami2ha.guide Work:ami2ha
+    Copy icons/ami2ha.info Work:ami2ha
 
   Use @{b}ami2ha@{ub} (the 68000 build) instead if you are not on an
   020 or better.
@@ -188,6 +195,75 @@ And open it:
 
 The configuration file remembers the host and the token file, so from
 here on CONFIG and GUI are all you need.
+
+@endnode
+
+@node EXAMPLE "A worked example"
+
+Start to finish, with nothing assumed. Substitute your own address.
+
+@{b}1. Get a token@{ub}
+
+  In Home Assistant: your user name, bottom left -> Security tab ->
+  Long-lived access tokens -> create one. Copy it; it is shown once.
+
+  Save it on the Amiga, on a line of its own:
+
+    Work:ami2ha/ha.token
+
+@{b}2. Label what you want to see@{ub}
+
+  In Home Assistant, make a label called @{b}amiga@{ub} and apply it to
+  the entities you want. See @{"Choosing entities" link LABEL}.
+
+@{b}3. Let ami2ha write its own configuration@{ub}
+
+    Work:ami2ha/ami2ha 192.168.1.100 TOKENFILE=Work:ami2ha/ha.token
+             LABEL=amiga WRITECONFIG=Work:ami2ha/ami2ha.cfg
+
+  It connects, asks which entities carry the label, and writes:
+
+    host       192.168.1.100
+    tokenfile  Work:ami2ha/ha.token
+    label      amiga
+
+    group "amiga"
+        sensor sensor.outside_temperature label "Outside"
+        toggle switch.desk_lamp label "Desk lamp"
+    end
+
+@{b}4. Run it@{ub}
+
+    Work:ami2ha/ami2ha CONFIG=Work:ami2ha/ami2ha.cfg GUI
+
+  That is the whole command from now on. Everything else is in the file.
+
+@{b}5. Make it start from Workbench@{ub}
+
+    Work:ami2ha/ami2ha CONFIG=Work:ami2ha/ami2ha.cfg WRITEICON
+
+  Now double-clicking the icon does the same thing.
+
+@{b}What goes where@{ub}
+
+  This trips people up, so plainly:
+
+  @{b}The configuration file@{ub} holds everything -- the address, the
+  port, which token file to read, the label, and the entire dashboard
+  layout. It is the file you keep.
+
+  @{b}The tool types@{ub} in the icon are only how a Workbench launch
+  passes arguments, because there is no command line to put them on.
+  In practice you want exactly one:
+
+    CONFIG=Work:ami2ha/ami2ha.cfg
+
+  HOST and TOKENFILE also exist as tool types, and as command line
+  arguments, because anything given that way @{i}overrides@{ui} the
+  configuration file. That is useful for pointing a test run at another
+  server without editing anything. It is not how you configure the
+  program day to day, and putting your settings in both places is the
+  quickest way to confuse yourself about which one is being used.
 
 @endnode
 
