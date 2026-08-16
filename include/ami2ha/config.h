@@ -12,6 +12,8 @@
  *
  *   host       homeassistant.local
  *   port       8123
+ *   tls        no          # yes for https; needs AmiSSL
+ *   tlsverify  yes         # no only for a self-signed certificate
  *   tokenfile  S:ha.token
  *   columns    2
  *
@@ -79,6 +81,26 @@ typedef struct {
 typedef struct {
     char host[CFG_HOST_MAX];
     int  port;
+    /*
+     * Whether `port` was actually named, as opposed to being the 8123 that
+     * cfg_init fills in. Without this a caller cannot tell the default from
+     * a deliberate 8123, and so cannot pick a different default of its own
+     * -- which is exactly what a TLS connection needs to do for 443.
+     */
+    int  port_explicit;
+    /*
+     * Reach the server over TLS. Off by default: Home Assistant's own
+     * default is plain http on 8123, and most people run ami2ha on the
+     * same network as the server.
+     */
+    int  tls;
+    /*
+     * Check the certificate against the trusted roots, and that it names
+     * the host being connected to. On unless explicitly turned off, which
+     * is what a self-signed certificate needs -- that keeps the traffic
+     * encrypted but stops proving who is answering.
+     */
+    int  tls_verify;
     char tokenfile[CFG_PATH_MAX];
     char token[CFG_TOKEN_MAX];
     /*

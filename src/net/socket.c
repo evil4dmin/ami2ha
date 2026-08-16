@@ -10,6 +10,7 @@
 #include <proto/socket.h>
 
 #include "ami2ha/net.h"
+#include "tls.h"
 
 #include <string.h>
 
@@ -57,6 +58,8 @@ int net_lib_open(void)
 
 void net_lib_close(void)
 {
+    /* AmiSSL sits on bsdsocket.library, so it has to let go first. */
+    tls_lib_close();
     if (SocketBase) {
         CloseLibrary(SocketBase);
         SocketBase = NULL;
@@ -71,15 +74,33 @@ const char *net_error_text(int code)
     case NET_ERR_HOST:    return "host not found";
     case NET_ERR_SOCKET:  return "could not create socket";
     case NET_ERR_CONNECT: return "could not connect";
+    case NET_ERR_TLS:     return "TLS failed";
+    case NET_ERR_CERT:    return "the server's certificate was not accepted";
     }
     return "unknown error";
 }
 
 void net_socket_init(a2h_socket *s)
 {
-    s->sock       = -1;
-    s->connecting = 0;
+    s->sock            = -1;
+    s->connecting      = 0;
+    s->ssl             = NULL;
+    s->handshaking     = 0;
+    s->tls_wants_write = 0;
+    s->want_tls        = 0;
+    s->tls_host[0]     = '\0';
 }
+
+int net_connect_pending(const a2h_socket *s)
+{
+    return s->connecting || s->handshaking;
+}
+
+int net_tls_available(void) { return tls_available(); }
+
+void net_tls_set_verify(int on) { tls_set_verify(on); }
+
+const char *net_tls_last_error(void) { return tls_last_error(); }
 
 int net_socket_is_open(const a2h_socket *s)
 {
@@ -92,7 +113,7 @@ static int set_nonblocking(long sock)
     return IoctlSocket(sock, FIONBIO, (char *)&on) == 0;
 }
 
-int net_connect(a2h_socket *s, const char *host, int port)
+int net_connect(a2h_socket *s, const char *host, int port, int use_tls)
 {
     struct sockaddr_in addr;
     unsigned long      ip;
@@ -102,6 +123,14 @@ int net_connect(a2h_socket *s, const char *host, int port)
 
     if (!SocketBase)
         return NET_ERR_LIB;
+
+    if (use_tls) {
+        if (!tls_available())
+            return NET_ERR_TLS;
+        s->want_tls = 1;
+        strncpy(s->tls_host, host, sizeof s->tls_host - 1);
+        s->tls_host[sizeof s->tls_host - 1] = '\0';
+    }
 
     memset(&addr, 0, sizeof addr);
     addr.sin_family = AF_INET;
@@ -129,8 +158,16 @@ int net_connect(a2h_socket *s, const char *host, int port)
     }
 
     rc = connect(s->sock, (struct sockaddr *)&addr, sizeof addr);
-    if (rc == 0)
+    if (rc == 0) {
+        /* On TLS the transport is not usable yet even though the TCP
+         * connect finished, so report progress and let net_connect_done
+         * run the handshake. */
+        if (s->want_tls) {
+            s->connecting = 1;
+            return 1;
+        }
         return NET_OK;
+    }
 
     net_last_errno = Errno();
     if (net_last_errno == EINPROGRESS || net_last_errno == EWOULDBLOCK) {
@@ -147,8 +184,21 @@ int net_connect_done(a2h_socket *s)
     int err = 0;
     long len = (long)sizeof err;
 
+    if (!net_socket_is_open(s))
+        return NET_ERR_CONNECT;
+
+    /* A handshake takes several round trips of its own, so it re-enters
+     * here exactly as the connect does, and for the caller the two are one
+     * "still connecting" state. */
+    if (s->handshaking) {
+        int rc = tls_continue(s);
+        if (rc < 0)
+            net_disconnect(s);
+        return rc;
+    }
+
     if (!s->connecting)
-        return net_socket_is_open(s) ? NET_OK : NET_ERR_CONNECT;
+        return NET_OK;
 
     /* A non-blocking connect reports its outcome through SO_ERROR; the
      * socket becoming writable only means the attempt finished, not that
@@ -165,14 +215,44 @@ int net_connect_done(a2h_socket *s)
     }
 
     s->connecting = 0;
+
+    if (s->want_tls && !s->ssl) {
+        int rc = tls_start(s, s->tls_host);
+        if (rc < 0)
+            net_disconnect(s);
+        return rc;
+    }
+
     return NET_OK;
 }
 
 void net_disconnect(a2h_socket *s)
 {
+    /* Before the socket goes: close_notify has to travel over it. */
+    tls_close(s);
     if (s->sock >= 0)
         CloseSocket(s->sock);
     net_socket_init(s);
+}
+
+int net_want_write(const a2h_socket *s)
+{
+    /*
+     * During a handshake only TLS knows which way it is waiting, and it is
+     * usually waiting to read. Asking for writability regardless would make
+     * WaitSelect return immediately every time -- the socket is connected,
+     * so it is always writable -- and turn the handshake into a busy loop
+     * that pins the CPU while it waits for the server.
+     */
+    if (s->handshaking)
+        return s->tls_wants_write;
+
+    return s->connecting || s->tls_wants_write;
+}
+
+int net_pending(const a2h_socket *s)
+{
+    return tls_pending(s);
 }
 
 long net_send(a2h_socket *s, const void *data, size_t n)
@@ -183,6 +263,8 @@ long net_send(a2h_socket *s, const void *data, size_t n)
         return NET_CLOSED;
     if (n == 0)
         return 0;
+    if (s->ssl)
+        return tls_send(s, data, n);
 
     rc = send(s->sock, (void *)data, (long)n, 0);
     if (rc >= 0)
@@ -198,6 +280,8 @@ long net_recv(a2h_socket *s, void *data, size_t n)
 
     if (s->sock < 0)
         return NET_CLOSED;
+    if (s->ssl)
+        return tls_recv(s, data, n);
 
     rc = recv(s->sock, data, (long)n, 0);
     if (rc > 0)

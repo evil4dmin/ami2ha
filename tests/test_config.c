@@ -45,6 +45,77 @@ static void test_defaults(void)
     cfg_free(&cfg);
 }
 
+static void test_tls_defaults_off_but_verified(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX];
+
+    /* Plain http is the default, but the moment TLS is switched on the
+     * certificate must be checked without anyone having to ask. */
+    CHECK(parse(&cfg, "host ha.local\n", err, sizeof err));
+    CHECK_INT(cfg.tls, 0);
+    CHECK_INT(cfg.tls_verify, 1);
+    cfg_free(&cfg);
+
+    CHECK(parse(&cfg, "host ha.local\ntls yes\n", err, sizeof err));
+    CHECK_INT(cfg.tls, 1);
+    CHECK_INT(cfg.tls_verify, 1);
+    cfg_free(&cfg);
+}
+
+static void test_tls_spellings(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX];
+    /* People will write any of these; rejecting a file over the spelling
+     * of "yes" would be needless. */
+    static const char *const yes[] = { "yes", "on", "true", "1" };
+    static const char *const no[]  = { "no", "off", "false", "0" };
+    char text[64];
+    size_t i;
+
+    for (i = 0; i < sizeof yes / sizeof yes[0]; i++) {
+        sprintf(text, "host h\ntls %s\n", yes[i]);
+        CHECK(parse(&cfg, text, err, sizeof err));
+        CHECK_INT(cfg.tls, 1);
+        cfg_free(&cfg);
+    }
+    for (i = 0; i < sizeof no / sizeof no[0]; i++) {
+        sprintf(text, "host h\ntls %s\n", no[i]);
+        CHECK(parse(&cfg, text, err, sizeof err));
+        CHECK_INT(cfg.tls, 0);
+        cfg_free(&cfg);
+    }
+
+    CHECK(!parse(&cfg, "host h\ntls maybe\n", err, sizeof err));
+    cfg_free(&cfg);
+}
+
+static void test_tls_survives_a_write(void)
+{
+    a2h_config cfg, back;
+    char       err[CFG_ERR_MAX];
+    a2h_buf    out;
+
+    /* Turning verification off is the setting most worth losing track of:
+     * silently dropping it on a rewrite would quietly re-break a working
+     * self-signed setup. */
+    CHECK(parse(&cfg, "host ha.local\ntls yes\ntlsverify no\n",
+                err, sizeof err));
+    CHECK_INT(cfg.tls, 1);
+    CHECK_INT(cfg.tls_verify, 0);
+
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(parse(&back, (const char *)out.data, err, sizeof err));
+    CHECK_INT(back.tls, 1);
+    CHECK_INT(back.tls_verify, 0);
+
+    buf_free(&out);
+    cfg_free(&cfg);
+    cfg_free(&back);
+}
+
 static void test_groups_and_widgets(void)
 {
     a2h_config cfg;
@@ -520,6 +591,9 @@ void suite_config(void)
 {
     RUN(test_globals);
     RUN(test_defaults);
+    RUN(test_tls_defaults_off_but_verified);
+    RUN(test_tls_spellings);
+    RUN(test_tls_survives_a_write);
     RUN(test_groups_and_widgets);
     RUN(test_label_defaults_from_entity);
     RUN(test_button_with_json_data);

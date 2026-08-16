@@ -57,6 +57,8 @@ typedef struct {
     char host[HA_HOST_MAX];
     char path[HA_PATH_MAX];   /* "/api/websocket" */
     int  port;                /* 8123 by default  */
+    int  tls;                 /* wss:// rather than ws://          */
+    int  tls_verify;          /* check the certificate; on by default */
     char token[HA_TOKEN_MAX]; /* long-lived access token */
 } ha_config;
 

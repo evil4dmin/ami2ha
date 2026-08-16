@@ -42,7 +42,8 @@ size_t __stack = 32768;
 
 #define TEMPLATE                                                        \
     "HOST,PORT/N,TOKEN/K,TOKENFILE/K,CONFIG/K,WRITECONFIG/K,"          \
-    "GUI/S,LIST/S,WATCH/S,WRITEICON/S,GET/K,TOGGLE/K,ON/K,OFF/K,DOMAIN/K,TIMEOUT/N/K"
+    "GUI/S,LIST/S,WATCH/S,WRITEICON/S,GET/K,TOGGLE/K,ON/K,OFF/K,DOMAIN/K," \
+    "TIMEOUT/N/K,TLS/S,NOVERIFY/S"
 
 struct cli_args {
     STRPTR host;
@@ -66,6 +67,8 @@ struct cli_args {
     STRPTR off;
     STRPTR domain;
     LONG  *timeout;
+    LONG   tls;
+    LONG   noverify;
 };
 
 struct app {
@@ -77,6 +80,7 @@ struct app {
     int         ready;
     int         failed;
     int         watching;
+    int         tls_retries;
 };
 
 /* ------------------------------------------------------------------ */
@@ -183,6 +187,35 @@ static void list_entities(ha_client *c, const char *domain)
     printf("\n%d entit%s\n", n, n == 1 ? "y" : "ies");
 }
 
+/*
+ * Milliseconds since midnight, for measuring how long we have been waiting.
+ *
+ * The deadline loops below used to subtract their pump() timeout each pass,
+ * on the assumption that a pump always waits the whole 250ms. It does not:
+ * whenever the socket already has data, pump returns at once, and the
+ * "remaining time" then falls far faster than real time. A slow transfer --
+ * a large entity list, or anything over TLS on a 68k -- was cut off in a
+ * fraction of the timeout the user asked for. So use the clock instead.
+ */
+static long clock_ms(void)
+{
+    struct DateStamp ds;
+
+    DateStamp(&ds);
+    /* Since midnight, so it always fits: a tick is 1/50s. */
+    return ds.ds_Minute * 60000L + ds.ds_Tick * 20L;
+}
+
+/* Elapsed since `start`, coping with the clock passing midnight. */
+static long elapsed_ms(long start)
+{
+    long d = clock_ms() - start;
+
+    if (d < 0)
+        d += 24L * 60L * 60L * 1000L;
+    return d;
+}
+
 /* Write whatever the client has queued, keeping what would not fit. */
 static int flush_output(struct app *a)
 {
@@ -209,7 +242,7 @@ static int pump(struct app *a, long timeout_ms)
     int           readable = 0, writable = 0;
     int           want_write;
 
-    want_write = a->sock.connecting || ha_client_out(&a->ha)->len > 0;
+    want_write = net_want_write(&a->sock) || ha_client_out(&a->ha)->len > 0;
 
     /* One wait covers the socket, Ctrl-C and the ARexx port together. */
     sigs = net_wait(&a->sock, want_write, SIGBREAKF_CTRL_C | rexxsig,
@@ -227,11 +260,34 @@ static int pump(struct app *a, long timeout_ms)
             return 0;              /* its commands may have queued output */
     }
 
-    if (a->sock.connecting) {
-        if (writable) {
+    if (net_connect_pending(&a->sock)) {
+        /* A handshake advances on whichever direction became ready, not on
+         * writability alone the way a bare TCP connect does. */
+        if (readable || writable) {
             int rc = net_connect_done(&a->sock);
             if (rc < 0) {
-                printf("ami2ha: %s\n", net_error_text(rc));
+                const char *detail = net_tls_last_error();
+
+                /*
+                 * A handshake that ends in an EOF before it completed is
+                 * usually transient -- Home Assistant Cloud's remote access
+                 * tunnels TLS through to the server, and drops one now and
+                 * then -- so try again rather than failing the whole run.
+                 *
+                 * Only NET_ERR_TLS is retried. A certificate that was
+                 * rejected comes back as NET_ERR_CERT, and no amount of
+                 * reconnecting will change its mind.
+                 */
+                if (rc == NET_ERR_TLS && a->tls_retries < 2) {
+                    a->tls_retries++;
+                    net_disconnect(&a->sock);
+                    if (net_connect(&a->sock, a->ha.cfg.host, a->ha.cfg.port,
+                                    a->ha.cfg.tls) >= 0)
+                        return 1;
+                }
+
+                printf("ami2ha: %s%s%s\n", net_error_text(rc),
+                       detail ? " -- " : "", detail ? detail : "");
                 return 0;
             }
             if (rc == NET_OK)
@@ -243,8 +299,20 @@ static int pump(struct app *a, long timeout_ms)
     if (writable && !flush_output(a))
         return 0;
 
-    if (readable) {
+    /*
+     * Drain rather than read once. A single TCP segment can carry several
+     * TLS records, and once the socket has been read empty select will not
+     * report it readable again -- so whatever is still buffered inside TLS
+     * has to be taken now, or it sits there waiting on traffic that may
+     * never come.
+     */
+    while (readable || net_pending(&a->sock)) {
         long got = net_recv(&a->sock, buf, sizeof buf);
+        /* One read per report of readiness; any further passes have to be
+         * justified by net_pending, or a busy socket never lets go. */
+        readable = 0;
+        if (got == NET_WOULDBLOCK)
+            break;
         if (got == NET_CLOSED) {
             printf("ami2ha: connection closed by server\n");
             return 0;
@@ -285,6 +353,8 @@ static void free_dash(a2h_config **p)
  *   HOST=192.168.1.100
  *   PORT=8123
  *   TOKENFILE=Work:a2h/ha.token
+ *   TLS         (present at all: connect over https)
+ *   NOVERIFY    (present at all: do not check the certificate)
  *
  * Returns 0 if the icon could not be read, in which case there is nothing
  * to go on and the program has no console to complain to.
@@ -333,6 +403,14 @@ static int read_tooltypes(struct WBStartup *wbs, struct cli_args *args,
             *portbuf = atol((const char *)v);
             args->port = portbuf;
         }
+        /* Switches, so only their presence matters -- an icon carrying
+         * bare TLS is how Workbench spells the Shell's TLS keyword. */
+        if (FindToolType((CONST_STRPTR *)dobj->do_ToolTypes,
+                         (CONST_STRPTR)"TLS") != NULL)
+            args->tls = 1;
+        if (FindToolType((CONST_STRPTR *)dobj->do_ToolTypes,
+                         (CONST_STRPTR)"NOVERIFY") != NULL)
+            args->noverify = 1;
 
         FreeDiskObject(dobj);
         ok = 1;
@@ -551,7 +629,29 @@ int main(int argc, char **argv)
         return RETURN_ERROR;
     }
 
-    cfg.port = args.port ? (int)*args.port : (dash->port ? dash->port : 8123);
+    cfg.tls        = args.tls ? 1 : dash->tls;
+    cfg.tls_verify = args.noverify ? 0 : (dash->tls ? dash->tls_verify : 1);
+
+    /*
+     * A TLS server is almost always reached through a reverse proxy on 443
+     * rather than Home Assistant's own 8123, so default the port to match
+     * the scheme instead of making everyone spell it out.
+     */
+    cfg.port = args.port          ? (int)*args.port
+             : dash->port_explicit ? dash->port
+             : cfg.tls             ? 443
+                                   : 8123;
+
+    if (cfg.tls && !net_tls_available()) {
+        printf("ami2ha: this build has no TLS support, so TLS cannot be used\n");
+        free_dash(&dash);
+        if (rda) FreeArgs(rda);
+        if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
+        return RETURN_ERROR;
+    }
+    net_tls_set_verify(cfg.tls_verify);
+    if (cfg.tls && !cfg.tls_verify)
+        printf("ami2ha: warning -- not checking the server's certificate\n");
 
     token[0] = '\0';
     if (args.token) {
@@ -638,9 +738,10 @@ int main(int argc, char **argv)
             ha_client_set_filter(&app.ha, filter_ids, nfilter);
     }
 
-    printf("ami2ha: connecting to %s:%d ...\n", cfg.host, cfg.port);
+    printf("ami2ha: connecting to %s:%d%s ...\n", cfg.host, cfg.port,
+           cfg.tls ? " over TLS" : "");
 
-    rc = net_connect(&app.sock, cfg.host, cfg.port);
+    rc = net_connect(&app.sock, cfg.host, cfg.port, cfg.tls);
     if (rc < 0) {
         printf("ami2ha: %s\n", net_error_text(rc));
         rc_exit = RETURN_FAIL;
@@ -672,10 +773,13 @@ int main(int argc, char **argv)
         /* Connect and load first. With a label the widget list does not
          * exist until Home Assistant has answered, and even without one
          * this avoids opening an empty window that fills in later. */
-        while (!app.ready && !app.failed && deadline_ms > 0) {
-            if (!pump(&app, 250))
-                goto cleanup;
-            deadline_ms -= 250;
+        {
+            long started = clock_ms();
+            while (!app.ready && !app.failed &&
+                   elapsed_ms(started) < deadline_ms) {
+                if (!pump(&app, 250))
+                    goto cleanup;
+            }
         }
         if (app.failed) { rc_exit = RETURN_FAIL; goto cleanup; }
         if (!app.ready) {
@@ -743,10 +847,13 @@ int main(int argc, char **argv)
         deadline_ms = *args.timeout * 1000L;
     else
         deadline_ms = (nfilter > 0) ? 20000L : 120000L;
-    while (!app.ready && !app.failed && deadline_ms > 0) {
-        if (!pump(&app, 250))
-            goto cleanup;
-        deadline_ms -= 250;
+    {
+        long started = clock_ms();
+        while (!app.ready && !app.failed &&
+               elapsed_ms(started) < deadline_ms) {
+            if (!pump(&app, 250))
+                goto cleanup;
+        }
     }
 
     if (app.failed) {
@@ -770,7 +877,9 @@ int main(int argc, char **argv)
 
         if (!dash->host[0])
             strncpy(dash->host, cfg.host, sizeof dash->host - 1);
-        dash->port = cfg.port;
+        dash->port       = cfg.port;
+        dash->tls        = cfg.tls;
+        dash->tls_verify = cfg.tls_verify;
         if (!dash->tokenfile[0] && args.tokenfile)
             strncpy(dash->tokenfile, (const char *)args.tokenfile,
                     sizeof dash->tokenfile - 1);

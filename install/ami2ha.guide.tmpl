@@ -19,6 +19,7 @@
 @{" Settings          " link SETTINGS}
 @{" Starting it       " link STARTING}
 @{" ARexx             " link AREXX}
+@{" TLS               " link TLS}
 @{" When it breaks    " link TROUBLE}
 @{" Credits           " link CREDITS}
 
@@ -33,6 +34,10 @@
   A TCP/IP stack offering @{b}bsdsocket.library@{ub}. Roadshow, AmiTCP and
   Miami all work. Under UAE the built-in bsdsocket emulation works, and
   needs no configuration beyond switching it on.
+
+  @{b}AmiSSL 5@{ub} only if you connect over @{link "TLS" TLS}. Plain http
+  needs nothing extra, and AmiSSL is opened only when it is actually asked
+  for -- an installation without it runs perfectly well.
 
   @{b}MUI 3.8@{ub} or newer, for the dashboard. The command line modes
   work without it.
@@ -425,6 +430,37 @@ is in AREXX.md in the source archive.
   No TCP/IP stack is running. Start Roadshow, AmiTCP or Miami first.
   Under UAE, switch on bsdsocket emulation in the configuration.
 
+@{b}"amisslmaster.library not found -- AmiSSL is not installed"@{ub}
+
+  TLS was asked for but AmiSSL is not on this machine. Install AmiSSL 5,
+  or drop the TLS switch and connect over plain http.
+
+@{b}"the server's certificate was not accepted"@{ub}
+
+  The message after it says which check failed. A self-signed certificate
+  gives "self-signed certificate"; a name that does not match what you
+  typed gives "Hostname mismatch" -- reach the server by the name on its
+  certificate rather than by its IP address. See @{link "TLS" TLS} for the
+  NOVERIFY escape hatch and what it gives up.
+
+@{b}TLS fails, but the same address works in a browser@{ub}
+
+  Two things bite here, and neither is obvious.
+
+  A reverse proxy usually chooses its certificate from the name you asked
+  for, and many refuse a connection made to a bare IP address because no
+  name is sent at all. Use the host name, not the number.
+
+  But AmigaOS has no mDNS, so a name ending in .local -- which is what
+  Home Assistant suggests by default -- does not resolve here even though
+  every other machine in the house finds it. Give it an address by hand in
+  @{b}DEVS:Internet/hosts@{ub}:
+
+    192.168.1.100    homeassistant.local
+
+  That one line is enough, and it is also what lets the name on the
+  certificate match what you connected to.
+
 @{b}"could not connect"@{ub}
 
   The address or the port is wrong, or the machine cannot be reached.
@@ -467,6 +503,71 @@ is in AREXX.md in the source archive.
 
   Bug reports are welcome at
   https://github.com/evil4dmin/ami2ha/issues
+
+@endnode
+
+@node TLS "TLS"
+
+@{b}Connecting over TLS@{ub}
+
+  Home Assistant serves plain http on port 8123 by default, and on your own
+  network that is usually what you want. If your server is behind https --
+  a reverse proxy, or Home Assistant's own SSL settings -- add the
+  @{b}TLS@{ub} switch:
+
+    ami2ha myhouse.example.com TLS TOKENFILE=Work:ami2ha/ha.token
+
+  The port then defaults to 443 rather than 8123, so you only need to name
+  a port if yours is different.
+
+  In a configuration file the same thing is:
+
+    host       myhouse.example.com
+    tls        yes
+
+  This needs @{b}AmiSSL 5@{ub} installed. It is opened the first time TLS
+  is used and not before, so it costs nothing on a plain http setup.
+
+@{b}Certificates@{ub}
+
+  By default ami2ha checks that the certificate is signed by a trusted
+  authority @{i}and@{ui} that it names the host you asked for. Without the
+  second check any valid certificate for any site would be accepted, which
+  is no protection at all.
+
+  A self-signed certificate -- common on a home server -- fails that check.
+  You can turn it off:
+
+    ami2ha myhouse TLS NOVERIFY TOKENFILE=Work:ami2ha/ha.token
+
+  or in the configuration file:
+
+    tls        yes
+    tlsverify  no
+
+  Be clear about what this costs. The traffic is still encrypted, so nobody
+  reading the wire sees your token. But nothing proves any more that the
+  machine answering is yours, and your token is handed to whatever does
+  answer. Only do this on a network you trust.
+
+@{b}Home Assistant Cloud (Nabu Casa)@{ub}
+
+  Remote access works, and is the case TLS is really for -- reaching your
+  house from somewhere else. Use the ui.nabu.casa address as the host with
+  the TLS switch and nothing else changes.
+
+  Its certificate is a proper one, so verification can stay on. Expect a
+  connection to take a few seconds longer than one on your own network:
+  the cloud carries the encrypted session through to your server, so the
+  handshake travels the whole way. That tunnel also drops a handshake
+  occasionally; ami2ha simply tries again, and you will not normally see it.
+
+@{b}Is it worth it?@{ub}
+
+  On a home LAN, honestly, often not: TLS on a 68k costs real time on every
+  connection, and the token never leaves your own network. It earns its
+  keep when you reach the server from outside the house, which is exactly
+  when the token would otherwise cross networks in clear.
 
 @endnode
 

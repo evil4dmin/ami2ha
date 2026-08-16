@@ -14,6 +14,7 @@ void cfg_init(a2h_config *cfg)
     cfg->port         = 8123;
     cfg->columns      = 1;
     cfg->refresh_secs = 60;
+    cfg->tls_verify   = 1;   /* only ever turned off deliberately */
 }
 
 void cfg_free(a2h_config *cfg)
@@ -199,6 +200,25 @@ static void skip_rest_of_line(cfg_scan *s)
         s->p++;
         s->line++;
     }
+}
+
+/*
+ * Accept the several spellings people reasonably expect, rather than
+ * insisting on one and rejecting a file over it.
+ */
+static int parse_bool(const char *t, int *out)
+{
+    if (strcmp(t, "yes") == 0 || strcmp(t, "on") == 0 ||
+        strcmp(t, "true") == 0 || strcmp(t, "1") == 0) {
+        *out = 1;
+        return 1;
+    }
+    if (strcmp(t, "no") == 0 || strcmp(t, "off") == 0 ||
+        strcmp(t, "false") == 0 || strcmp(t, "0") == 0) {
+        *out = 0;
+        return 1;
+    }
+    return 0;
 }
 
 static int parse_long(const char *t, long *out)
@@ -445,6 +465,17 @@ int cfg_parse(a2h_config *cfg, const char *text, size_t len,
             } else if (strcmp(tok, "token") == 0) {
                 if (next_token(&s, tok, sizeof tok))
                     copy_str(cfg->token, sizeof cfg->token, tok);
+            } else if (strcmp(tok, "tls") == 0 ||
+                       strcmp(tok, "tlsverify") == 0) {
+                char key[16];
+                int  on;
+                copy_str(key, sizeof key, tok);
+                if (!next_token(&s, tok, sizeof tok) || !parse_bool(tok, &on)) {
+                    cfg_fail(&s, "expected yes or no after", key);
+                    break;
+                }
+                if (strcmp(key, "tls") == 0) cfg->tls = on;
+                else                         cfg->tls_verify = on;
             } else if (strcmp(tok, "port") == 0 ||
                        strcmp(tok, "columns") == 0 ||
                        strcmp(tok, "refresh") == 0) {
@@ -455,7 +486,10 @@ int cfg_parse(a2h_config *cfg, const char *text, size_t len,
                     cfg_fail(&s, "expected a number after", key);
                     break;
                 }
-                if (strcmp(key, "port") == 0)         cfg->port = (int)v;
+                if (strcmp(key, "port") == 0) {
+                    cfg->port          = (int)v;
+                    cfg->port_explicit = 1;
+                }
                 else if (strcmp(key, "columns") == 0) cfg->columns = (int)v;
                 else                                  cfg->refresh_secs = (int)v;
             } else {
@@ -597,6 +631,10 @@ int cfg_generate(a2h_buf *out, const ha_store *store, const a2h_config *base)
     if (base && base->host[0]) {
         buf_printf(out, "host       %s\n", base->host);
         buf_printf(out, "port       %d\n", base->port);
+        if (base->tls)
+            buf_printf(out, "tls        yes\n");
+        if (base->tls && !base->tls_verify)
+            buf_printf(out, "tlsverify  no\n");
     }
     if (base && base->tokenfile[0])
         buf_printf(out, "tokenfile  %s\n", base->tokenfile);
@@ -699,6 +737,10 @@ int cfg_write(const a2h_config *cfg, a2h_buf *out)
         buf_printf(out, "host       %s\n", cfg->host);
     if (cfg->port && cfg->port != 8123)
         buf_printf(out, "port       %d\n", cfg->port);
+    if (cfg->tls)
+        buf_printf(out, "tls        yes\n");
+    if (cfg->tls && !cfg->tls_verify)
+        buf_printf(out, "tlsverify  no\n");
     if (cfg->tokenfile[0])
         buf_printf(out, "tokenfile  %s\n", cfg->tokenfile);
     /* Preserved only if it was already in the file; TOKENFILE is preferred. */

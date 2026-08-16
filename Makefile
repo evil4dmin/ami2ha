@@ -40,8 +40,19 @@ OBJ         := $(patsubst %.c,$(BUILD)/%.o,$(SRC))
 
 # --- flags -----------------------------------------------------------
 #
+# The vbcc toolchain ships its own, older copy of the AmiSSL headers under
+# targets/m68k-amigaos/include. Whichever include path comes first wins, and
+# if that is the toolchain's, the SDK's OpenSSL headers end up paired with
+# the toolchain's inline stubs. The two disagree about which types are still
+# public, and the build dies far away in inline/amissl_protos.h complaining
+# about a declaration that is perfectly valid -- so the SDK has to come ahead
+# of the toolchain path, not after it.
+ifeq ($(USE_AMISSL),1)
+AMISSL_INC  := -I$(AMISSL_SDK)/include
+endif
+
 CFLAGS      := +$(VC_CONFIG) -c99 -O=$(OPT) -cpu=$(CPU) \
-               -Iinclude -I$(VBCC)/targets/m68k-amigaos/include
+               -Iinclude $(AMISSL_INC) -I$(VBCC)/targets/m68k-amigaos/include
 
 # vbcc's -dontwarn refuses several message numbers, including the two the
 # NDK headers trigger in bulk (53: anonymous union members in
@@ -55,9 +66,19 @@ NDK_NOISE   := grep -v -e 'warning 53 in' -e 'warning 226 in' \
 # are selected by the target config's -amiga-softfloat.
 LDFLAGS     := -lamiga
 
+# No link library goes with this. The SDK's libamisslstubs.a is an ELF
+# archive for gcc; under vbcc proto/amissl.h expands to inline stubs that
+# jsr straight through the library base, so there is nothing left to link.
 ifeq ($(USE_AMISSL),1)
-CFLAGS      += -DA2H_USE_AMISSL=1 -I$(AMISSL_SDK)/include
+CFLAGS      += -DA2H_USE_AMISSL=1
 endif
+
+# vbcc only discards the unused static inline helpers the OpenSSL headers
+# declare when this optimiser bit is set. -O=17375 is plain -O=1 with that
+# one bit added (AmiSSL's README-SDK, section 11) -- which matters here,
+# because -O=2 miscompiles library calls in this compiler. Without it this
+# object alone carries 46 KB of dead functions.
+$(BUILD)/src/net/tls.o: CFLAGS := $(subst -O=$(OPT),-O=17375,$(CFLAGS))
 
 # --- release ---------------------------------------------------------
 #

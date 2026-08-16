@@ -873,7 +873,8 @@ static void try_reconnect(a2h_ui *ui)
     ui->attempt_at = ui_now();
     ui_set_status(ui, "Reconnecting...");
 
-    rc = net_connect(ui->sock, ui->ha->cfg.host, ui->ha->cfg.port);
+    rc = net_connect(ui->sock, ui->ha->cfg.host, ui->ha->cfg.port,
+                     ui->ha->cfg.tls);
     if (rc < 0) {
         schedule_retry(ui, net_error_text(rc));
         return;
@@ -943,11 +944,14 @@ static void service_socket(a2h_ui *ui, int readable, int writable)
 {
     static unsigned char buf[2048]; /* keep it off the stack, as in main.c */
 
-    if (ui->sock->connecting) {
-        if (writable) {
+    if (net_connect_pending(ui->sock)) {
+        /* A TLS handshake advances on whichever direction became ready,
+         * not on writability alone the way a bare TCP connect does. */
+        if (readable || writable) {
             int rc = net_connect_done(ui->sock);
             if (rc < 0) {
-                connection_lost(ui, net_error_text(rc));
+                const char *detail = net_tls_last_error();
+                connection_lost(ui, detail ? detail : net_error_text(rc));
                 return;
             }
             if (rc == NET_OK)
@@ -961,8 +965,16 @@ static void service_socket(a2h_ui *ui, int readable, int writable)
         return;
     }
 
-    if (readable) {
+    /* Drain rather than read once: one TCP segment can carry several TLS
+     * records, and select will not report the socket readable again for
+     * bytes that are already buffered inside TLS. */
+    while (readable || net_pending(ui->sock)) {
         long got = net_recv(ui->sock, buf, sizeof buf);
+        /* One read per report of readiness; further passes have to be
+         * justified by net_pending, or a busy socket never lets go. */
+        readable = 0;
+        if (got == NET_WOULDBLOCK)
+            break;
         if (got == NET_CLOSED) {
             connection_lost(ui, "Connection closed");
             return;
@@ -1040,7 +1052,7 @@ int ui_run(a2h_ui *ui)
 
         {
             int   readable = 0, writable = 0;
-            int   want_write = ui->sock->connecting ||
+            int   want_write = net_want_write(ui->sock) ||
                                ha_client_out(ui->ha)->len > 0;
             ULONG rexxsig = rexx_sigmask(ui->rexx);
             ULONG fired;

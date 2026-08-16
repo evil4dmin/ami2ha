@@ -34,6 +34,8 @@ What you need
         -- Roadshow, AmiTCP, Miami, or UAE's own emulation
     MUI 3.8 or newer, for the dashboard
         -- the command line modes work without it
+    AmiSSL 5, only if you connect over https
+        -- opened on demand, so plain http needs nothing
 
 A 68020 is comfortable. The 68000 build works but is slow.
 
@@ -70,6 +72,15 @@ To start it from Workbench instead, write the setting into the icon
 once:
 
     Work:ami2ha/ami2ha CONFIG=Work:ami2ha/ami2ha.cfg WRITEICON
+
+If your server is behind https, add TLS -- the port then defaults to
+443 instead of 8123:
+
+    Work:ami2ha/ami2ha myhouse.example.com TLS TOKENFILE=Work:ami2ha/ha.token
+
+The certificate is checked by default. A self-signed one needs NOVERIFY
+as well, which keeps the traffic encrypted but stops proving who is
+answering, so use it only on a network you trust. The manual has more.
 
 Only CONFIG belongs in the icon's tool types. The address, the token
 file, the label and the whole layout live in the configuration file.
