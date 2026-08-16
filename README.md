@@ -9,9 +9,9 @@ ARexx port so the rest of your Workbench can join in.
 > **Status: early, but it works.** Everything below has been run on real
 > AmigaOS 3.2 hardware against a live Home Assistant: reading sensors,
 > flipping switches, the settings window, the ARexx port, Workbench
-> launch, and reconnecting after the link drops. What is missing is
-> HTTPS (AmiSSL) and drag-and-drop reordering; see
-> [Roadmap](#roadmap).
+> launch, reconnecting after the link drops, and HTTPS — verified against
+> a local reverse proxy and Home Assistant Cloud. What is missing is
+> drag-and-drop reordering; see [Roadmap](#roadmap).
 
 ## Try it
 
@@ -135,8 +135,9 @@ ami2ha CONFIG=S:ami2ha.cfg TOKENFILE=S:ha.token WRITEICON
 
 writes an icon whose tool types carry those settings, so afterwards the
 program can simply be double-clicked -- no Shell involved. Tool types read
-on a Workbench start are `CONFIG`, `HOST`, `PORT` and `TOKENFILE`, and can
-be edited in Workbench under Icons -> Information.
+on a Workbench start are `CONFIG`, `HOST`, `PORT`, `TOKENFILE`, `TLS` and
+`NOVERIFY`, and can be edited in Workbench under Icons -> Information. The
+last two are switches: what matters is whether they are present at all.
 
 ## The dashboard
 
@@ -186,6 +187,9 @@ tokenfile  S:ha.token
 label      amiga
 ```
 
+For an `https://` server add `tls yes` (and `tlsverify no` if the
+certificate is self-signed).
+
 Everything carrying that label appears on the Amiga, named by its friendly
 name, with the widget kind inferred from its domain. Add a label in the HA
 UI and it turns up on the next start -- no file to edit on the Amiga.
@@ -209,9 +213,32 @@ The WebSocket API pushes state changes, so the Amiga is not polling.
 
 By default the connection is plain HTTP and is intended for use on your own
 LAN. **Your access token is sent in cleartext in that mode** — anyone able to
-observe your local network can read it. Build with `USE_AMISSL=1` to enable
-`https://` endpoints via [AmiSSL](https://github.com/jens-maus/amissl); note
-that TLS on a plain 68k machine is slow.
+observe your local network can read it.
+
+Add `TLS` for an `https://` server, via
+[AmiSSL](https://github.com/jens-maus/amissl) 5:
+
+```
+ami2ha myhouse.example.com TLS TOKENFILE=S:ha.token LIST
+```
+
+The port then defaults to 443 rather than 8123. The certificate is checked
+against the trusted roots *and* against the host name you asked for —
+checking the chain alone would accept any valid certificate for any site.
+A self-signed certificate needs `NOVERIFY` as well, which keeps the traffic
+encrypted but stops proving who is answering; do that only on a network you
+trust. A build without AmiSSL refuses `TLS` outright rather than quietly
+falling back to cleartext.
+
+On a LAN this mostly is not worth the seconds it costs a 68k. It earns its
+keep reaching the house from outside, which is exactly when the token would
+otherwise cross networks you do not control — Home Assistant Cloud
+(`ui.nabu.casa`) works, and its certificate verifies without `NOVERIFY`.
+
+Two things catch people out, both covered in the manual: a reverse proxy
+usually picks its certificate from the name you asked for and may refuse a
+bare IP address, and AmigaOS has no mDNS, so a `.local` name needs a line in
+`DEVS:Internet/hosts`.
 
 ## ARexx
 
@@ -246,6 +273,7 @@ back. See [docs/AREXX.md](docs/AREXX.md) for the full command set.
 - [x] MUI dashboard: sensors, gauges, toggles, buttons, live updates
 - [x] Choose entities from within Home Assistant, by label
 - [x] Settings window: groups, choose entities, reorder, save
+- [x] HTTPS via AmiSSL, with certificate and host name verification
 - [ ] Drag-and-drop reordering (nice-to-have; Up/Down works today)
 - [x] Reconnect handling and connection status UI
 - [x] ARexx host port

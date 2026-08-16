@@ -6,7 +6,7 @@ Version:      @VERSION@
 Architecture: m68k-amigaos
 Distribution: Aminet
 Replaces:     comm/tcp/ami2ha-0.1.lha
-Requires:     bsdsocket.library; MUI 3.8+ for the dashboard
+Requires:     bsdsocket.library; MUI 3.8+ for the dashboard; AmiSSL 5 for https
 
 
 ami2ha -- control your smart home from a real Amiga
@@ -28,6 +28,9 @@ WHAT IT DOES
   - an ARexx port (AMI2HA): GET, ATTR, LIST, TOGGLE, ON, OFF, CALL,
     STATUS, so other programs can read the house and control it
   - reconnects by itself when the link drops, backing off up to a minute
+  - talks https where AmiSSL 5 is installed, checking the certificate and
+    the host name, so the access token can safely leave your own network --
+    Home Assistant Cloud included
   - starts from Workbench, with its settings in the icon's tool types
   - command line modes that work without MUI: LIST, GET, ON, OFF, WATCH
 
@@ -63,14 +66,32 @@ You will need a long-lived access token: in Home Assistant, click your
 user name at the bottom left, open the Security tab, and create one under
 "Long-lived access tokens". It is shown once. Keep it in a file, and do
 not pass it on a command line where your shell history would remember it.
-It travels over your network in the clear, which is fine on your own LAN
-and not fine over the internet.
+
+By default the token travels over your network in the clear, which is fine
+on your own LAN and not fine over the internet. Add the TLS switch and it
+does not: see below.
+
+
+HTTPS IS OPTIONAL
+
+Plain HTTP on port 8123 remains the default and needs nothing extra --
+no AmiSSL, no certificates, no configuration. Most people run ami2ha on
+the same network as their server, and for them nothing has changed.
+
+If you want it, adding the TLS switch connects over https instead. That
+needs AmiSSL 5 installed, and it is only opened when TLS is actually
+asked for, so it costs nothing on a plain setup. The certificate is
+checked by default, both the chain and that it names the host you asked
+for; a self-signed certificate needs NOVERIFY as well, which keeps the
+traffic encrypted but stops proving who is answering.
+
+It is worth it when you reach your house from somewhere else -- Home
+Assistant Cloud works -- and mostly is not on a LAN, where it only costs
+a slow machine time.
 
 
 NOT YET
 
-  - HTTPS (AmiSSL). Your server must be reachable over plain HTTP, which
-    on most home setups it is, on port 8123 from inside the network.
   - drag-and-drop reordering; Up and Down work today
 
 

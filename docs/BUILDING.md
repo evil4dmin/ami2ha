@@ -60,7 +60,40 @@ make VBCC=/opt/amiga  # toolchain installed somewhere else
 | `CPU` | `68000` | Minimum CPU |
 | `OPT` | `2` | vbcc optimisation level |
 | `USE_AMISSL` | `0` | Build TLS support |
+| `AMISSL_SDK` | `~/src/amiga-sdks/amissl/AmiSSL/Developer` | Extracted AmiSSL SDK |
 | `HOSTCC` | `cc` | Compiler for the host test runner |
+
+### Building with AmiSSL
+
+`make USE_AMISSL=1` needs the AmiSSL SDK extracted somewhere and
+`AMISSL_SDK` pointing at its `Developer/` directory. Two things about this
+combination are not obvious, and both cost an afternoon to find:
+
+- **The SDK's include path must come before the toolchain's.** The vbcc
+  AmigaOS target ships its own, older copy of the AmiSSL headers under
+  `targets/m68k-amigaos/include`. Whichever is found first wins, so with the
+  usual ordering the SDK's OpenSSL headers get paired with the toolchain's
+  inline stubs. The two disagree about which types are still public, and the
+  build fails deep inside `inline/amissl_protos.h` complaining about a
+  declaration that is perfectly valid — with nothing pointing at the real
+  cause. The Makefile puts `AMISSL_SDK` first for this reason.
+
+- **The TLS module is compiled at `-O=17375`, not `OPT`.** The OpenSSL
+  headers declare a great many static inline helpers, and vbcc only discards
+  the unused ones when a particular optimiser bit is set (AmiSSL's
+  `README-SDK`, section 11). `-O=17375` is plain `-O=1` with that bit added,
+  which matters because `-O=2` miscompiles library calls in this compiler —
+  see [vbcc-O2-bug.md](vbcc-O2-bug.md). Without it `tls.o` carries about
+  46 KB of dead code instead of 4 KB.
+
+There is no link library to add. The SDK ships `libamisslstubs.a` for gcc,
+an ELF archive vlink cannot read; under vbcc `proto/amissl.h` expands to
+inline stubs that `jsr` through the library base, so nothing is left to
+link.
+
+Note that AmiSSL is opened on demand at runtime, so a binary built with
+`USE_AMISSL=1` still runs on a machine without AmiSSL installed — it only
+refuses `TLS`.
 
 ## The portability split
 

@@ -510,10 +510,13 @@ is in AREXX.md in the source archive.
 
 @{b}Connecting over TLS@{ub}
 
-  Home Assistant serves plain http on port 8123 by default, and on your own
-  network that is usually what you want. If your server is behind https --
-  a reverse proxy, or Home Assistant's own SSL settings -- add the
-  @{b}TLS@{ub} switch:
+  All of this is optional. Plain http on port 8123 is the default and needs
+  nothing extra -- no AmiSSL, no certificates, nothing to configure -- and
+  on your own network that is usually what you want. If you never turn TLS
+  on, nothing on this page applies to you.
+
+  If your server is behind https -- a reverse proxy, or Home Assistant's own
+  SSL settings -- add the @{b}TLS@{ub} switch:
 
     ami2ha myhouse.example.com TLS TOKENFILE=Work:ami2ha/ha.token
 
