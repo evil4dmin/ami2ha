@@ -146,13 +146,13 @@ pack on the Amiga itself, which is also what produces the most
 Amiga-correct archive:
 
 ```
-LhA -r a ami2ha-0.1.lha ami2ha
+LhA -r a ami2ha-<version>.lha ami2ha
 ```
 
 Verify the result extracts into a drawer rather than loose files:
 
 ```
-LhA x ami2ha-0.1.lha
+LhA x ami2ha-<version>.lha
 ```
 
 ### Before publishing one

@@ -18,7 +18,7 @@ ARexx port so the rest of your Workbench can join in.
 Grab the release archive, unpack it, and double-click the `Install` icon:
 
 ```
-lha x ami2ha-0.1.1.lha
+lha x ami2ha-0.2.lha
 ```
 
 From a Shell the Installer has to be named in full, since it isn't on the
