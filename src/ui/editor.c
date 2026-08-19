@@ -292,22 +292,38 @@ static void refresh_groups(a2h_editor *ed)
         ed->group_titles[0] = "(no groups)";
     ed->ngroup_titles = ed->cfg->ngroups ? ed->cfg->ngroups : 1;
 
-    /*
-     * Two calls, not one. Handing a Cycle a new list of entries resets it
-     * to the first of them, and it does that while processing the same
-     * taglist -- so an active index set alongside the entries is thrown
-     * away. The gadget then said "Umwelt" while the lists below it showed
-     * whichever group was really being edited.
-     */
-    SetAttrs(ed->cyc_group,
-             MUIA_NoNotify,      TRUE,
-             MUIA_Cycle_Entries, (IPTR)ed->group_titles,
-             TAG_DONE);
-    SetAttrs(ed->cyc_group,
-             MUIA_NoNotify,      TRUE,
-             MUIA_Cycle_Active,  (IPTR)(ed->group < ed->ngroup_titles
-                                          ? ed->group : 0),
-             TAG_DONE);
+    {
+        LONG want  = (ed->group < ed->ngroup_titles) ? ed->group : 0;
+        LONG nudge = want ? 0 : (ed->ngroup_titles > 1 ? 1 : 0);
+
+        /*
+         * Three steps, and each one is needed.
+         *
+         * New entries have to land before an index into them means
+         * anything, so they go on their own. Handing a Cycle new entries
+         * makes it draw the first of them -- but it leaves the active
+         * attribute alone. So on reopening with, say, group 3 still
+         * selected, the attribute was already 3, setting it to 3 changed
+         * nothing, nothing repainted, and the gadget went on showing the
+         * first entry while the rest of the window showed group 3.
+         *
+         * Asking it for the active index gave 3 the whole time, which is
+         * what made this look like a bookkeeping bug: only the label was
+         * wrong. Hence the nudge -- a real change, so it repaints.
+         */
+        SetAttrs(ed->cyc_group,
+                 MUIA_NoNotify,      TRUE,
+                 MUIA_Cycle_Entries, (IPTR)ed->group_titles,
+                 TAG_DONE);
+        SetAttrs(ed->cyc_group,
+                 MUIA_NoNotify,     TRUE,
+                 MUIA_Cycle_Active, (IPTR)nudge,
+                 TAG_DONE);
+        SetAttrs(ed->cyc_group,
+                 MUIA_NoNotify,     TRUE,
+                 MUIA_Cycle_Active, (IPTR)want,
+                 TAG_DONE);
+    }
 
     if (ed->str_group)
         SetAttrs(ed->str_group, MUIA_NoNotify, TRUE,
