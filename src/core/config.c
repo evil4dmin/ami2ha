@@ -332,7 +332,8 @@ static void parse_widget(cfg_scan *s, a2h_config *cfg, widget_kind kind)
         if (kind == W_BUTTON)
             copy_str(w->service, sizeof w->service, tok);
         else if (kind == W_TEXT)
-            copy_text(w->label, sizeof w->label, tok), have_label = 1;
+            copy_text(w->label, sizeof w->label, tok), have_label = 1,
+            w->label_explicit = 1;
         else
             copy_str(w->entity, sizeof w->entity, tok);
     } else if (kind != W_TEXT) {
@@ -349,6 +350,7 @@ static void parse_widget(cfg_scan *s, a2h_config *cfg, widget_kind kind)
                 return;
             }
             copy_text(w->label, sizeof w->label, val);
+            w->label_explicit = 1;
             have_label = 1;
         } else if (strcmp(tok, "entity") == 0) {
             if (!next_token(s, val, sizeof val)) {

@@ -83,6 +83,13 @@ typedef struct {
      */
     int         cam_w, cam_h;
     int         cam_refresh;
+    /*
+     * The label was written in the file rather than derived from the entity
+     * id. Home Assistant's friendly name is the better caption for a widget
+     * that was discovered by label -- but not for one someone named
+     * themselves, and without this the two are indistinguishable.
+     */
+    int         label_explicit;
     int         group;                    /* owning group index */
 } a2h_widget;
 

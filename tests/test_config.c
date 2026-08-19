@@ -200,6 +200,38 @@ static void test_camera_discovered_from_label(void)
     cfg_free(&cfg);
 }
 
+static void test_hand_written_labels_are_marked(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX];
+
+    /* A dashboard that also carries a `label` line used to have every
+     * caption replaced by Home Assistant's friendly name. The friendly name
+     * beats an entity id, but never beats what someone chose. */
+    CHECK(parse(&cfg,
+        "label amiga\n"
+        "group \"g\"\n"
+        "    sensor sensor.a label \"Aussentemperatur\"\n"
+        "    sensor sensor.b\n"
+        "end\n", err, sizeof err));
+
+    CHECK_INT(cfg.widgets[0].label_explicit, 1);
+    CHECK_STR(cfg.widgets[0].label, "Aussentemperatur");
+    /* Derived from the entity id, so the friendly name may replace it. */
+    CHECK_INT(cfg.widgets[1].label_explicit, 0);
+    cfg_free(&cfg);
+}
+
+static void test_discovered_labels_are_not_explicit(void)
+{
+    a2h_config cfg;
+
+    cfg_init(&cfg);
+    CHECK(cfg_add_discovered(&cfg, "sensor.hof_temperatur", "amiga"));
+    CHECK_INT(cfg.widgets[0].label_explicit, 0);
+    cfg_free(&cfg);
+}
+
 static void test_groups_and_widgets(void)
 {
     a2h_config cfg;
@@ -682,6 +714,8 @@ void suite_config(void)
     RUN(test_camera_rejects_silly_sizes);
     RUN(test_camera_survives_a_write);
     RUN(test_camera_discovered_from_label);
+    RUN(test_hand_written_labels_are_marked);
+    RUN(test_discovered_labels_are_not_explicit);
     RUN(test_groups_and_widgets);
     RUN(test_label_defaults_from_entity);
     RUN(test_button_with_json_data);

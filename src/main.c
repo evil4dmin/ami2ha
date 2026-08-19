@@ -794,11 +794,20 @@ int main(int argc, char **argv)
          * states are in, prefer the friendly name -- that is the label the
          * user controls in Home Assistant, which is the whole point of
          * selecting entities there.
+         *
+         * A label written in the configuration file is left alone. It used
+         * to be overwritten too, so a hand-written dashboard that also
+         * carried a `label` line silently lost every caption it had been
+         * given -- the friendly name is a better guess than an entity id,
+         * but never better than what someone chose deliberately.
          */
         if (dash->label[0]) {
             int i;
             for (i = 0; i < dash->nwidgets; i++) {
-                ha_entity *e = ha_store_get(&app.ha.store, dash->widgets[i].entity);
+                ha_entity *e;
+                if (dash->widgets[i].label_explicit)
+                    continue;
+                e = ha_store_get(&app.ha.store, dash->widgets[i].entity);
                 if (e && e->name[0]) {
                     strncpy(dash->widgets[i].label, e->name,
                             sizeof dash->widgets[i].label - 1);
