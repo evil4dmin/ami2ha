@@ -16,6 +16,7 @@
 @{" First run         " link FIRSTRUN}
 @{" A worked example  " link EXAMPLE}
 @{" The dashboard     " link DASHBOARD}
+@{" Cameras           " link CAMERAS}
 @{" Settings          " link SETTINGS}
 @{" Starting it       " link STARTING}
 @{" ARexx             " link AREXX}
@@ -38,6 +39,12 @@
   @{b}AmiSSL 5@{ub} only if you connect over @{link "TLS" TLS}. Plain http
   needs nothing extra, and AmiSSL is opened only when it is actually asked
   for -- an installation without it runs perfectly well.
+
+  A @{b}JPEG datatype@{ub} only if you put a @{link "camera" CAMERAS} on the
+  dashboard. Home Assistant sends camera snapshots as JPEG and there is no
+  other format to ask it for, so without one those tiles cannot be drawn.
+  akJFIF from Aminet is the usual choice; OS 3.9 and 3.2 ship one. Nothing
+  else in ami2ha needs it.
 
   @{b}MUI 3.8@{ub} or newer, for the dashboard. The command line modes
   work without it.
@@ -315,6 +322,81 @@ same format.
 
 @endnode
 
+@node CAMERAS "Cameras"
+
+@{b}Snapshots, not video@{ub}
+
+  A camera entity can go on the dashboard as a picture. It is a still,
+  fetched when you ask for it -- there is no video, and there will not be:
+  a 68k has no chance of a live stream, but a snapshot every so often is
+  genuinely useful, and it is what most people look at a camera for anyway.
+
+  Cameras are chosen exactly like everything else. Give one the label your
+  dashboard uses, or write it into the file:
+
+    group "Hof"
+        camera camera.einfahrt label "Einfahrt" width 320 height 180
+    end
+
+  @{b}Click a tile to fetch a new picture.@{ub} The status line says what
+  it is doing; the rest of the dashboard keeps working while it does.
+
+@{b}Size@{ub}
+
+  @{b}width@{ub} and @{b}height@{ub} are not just how big the tile is. They
+  are what ami2ha asks Home Assistant for, and it does the scaling on the
+  server, so they decide how much data crosses the network and how much
+  work this machine has to do decoding it. A camera's own frame is usually
+  1280x720 and about 31 KB; at 320x180 it is nearer 6 KB.
+
+  320x180 is the default and looks right on a dashboard. Ask for more only
+  if you mean it -- the decoding is the slow part, not the transfer.
+
+  Home Assistant picks the nearest size that keeps the camera's shape, so
+  what arrives may be a little different from what was asked for. That is
+  normal and nothing to correct.
+
+@{b}Keeping it up to date@{ub}
+
+  @{b}refresh@{ub} is seconds between automatic updates. It is 0 by
+  default, meaning only when you click, which is deliberate: every refresh
+  costs a transfer and a decode, and several cameras updating on a timer
+  will keep a slow machine busy on pictures nobody is looking at.
+
+    camera camera.einfahrt label "Einfahrt" refresh 300
+
+  One fetch runs at a time whatever you set, so a slow camera cannot pile
+  up behind a fast one.
+
+@{b}The time under the picture@{ub}
+
+  Each tile is captioned with when its picture arrived. Most cameras stamp
+  their own time into the image as well, and the two are not the same: the
+  camera's is when the shutter fired, this one is when ami2ha last looked.
+  They differ by however long the camera took to answer -- and if a fetch
+  fails the tile keeps the last good picture, so the caption is the only
+  thing that still tells you how old it is.
+
+  Turn it off per camera with @{b}timestamp no@{ub}, or with @{b}Show
+  time@{ub} in the @{link "settings window" SETTINGS}.
+
+@{b}What it needs@{ub}
+
+  A JPEG datatype. See @{link "What you need" REQUIREMENTS}.
+
+@{b}Cameras that do not answer@{ub}
+
+  This is normal rather than exceptional. A battery camera sleeps and can
+  take five to ten seconds to wake, and will often refuse the first request
+  while it does. Some cameras never serve stills at all.
+
+  ami2ha keeps showing the last good picture and says what went wrong in
+  the status line. Nothing else on the dashboard is affected -- the
+  snapshot travels on its own connection, so a broken camera cannot
+  disturb your readings.
+
+@endnode
+
 @node SETTINGS "Settings"
 
 @{b}Project -> Settings@{ub}, or right-Amiga S.
@@ -333,9 +415,17 @@ same format.
                 above, and add it there. It keeps its label and its
                 settings on the way.
 
-  @{b}Properties@{ub}   the selected entity's label, how it is shown, and
-                the range for a gauge. Changes are kept when you move to
-                another entity; you do not have to press Return.
+  @{b}Columns@{ub}     how many group boxes sit side by side. One is a
+                single tall column; two puts them in pairs. Takes effect
+                when you press Use or Save.
+
+  @{b}Properties@{ub}   the selected entity's label and how it is shown,
+                the range for a gauge, and for a @{link "camera" CAMERAS}
+                its size, refresh interval and whether the time is shown.
+                Settings that do not apply to the selected entity are
+                greyed rather than hidden, so you can see what exists.
+                Changes are kept when you move to another entity; you do
+                not have to press Return.
 
   @{b}Save@{ub} writes the file and closes. @{b}Use@{ub} applies without
   writing, so it is gone at the next start. @{b}Cancel@{ub} puts
@@ -460,6 +550,28 @@ is in AREXX.md in the source archive.
 
   That one line is enough, and it is also what lets the name on the
   certificate match what you connected to.
+
+@{b}A camera tile stays empty, or says it cannot decode the picture@{ub}
+
+  Almost always a missing JPEG datatype. Home Assistant only sends JPEG
+  for cameras, so there is nothing else ami2ha can ask for. Install one --
+  akJFIF from Aminet is the usual choice -- and the tile will fill in on
+  the next click. Everything else on the dashboard works without it.
+
+  You can check with MultiView: if it cannot open a .jpg either, the
+  datatype is the problem rather than ami2ha.
+
+@{b}A camera says "Home Assistant said 500"@{ub}
+
+  The server could not get a picture from that camera. Battery cameras do
+  this while they wake up -- try again in a few seconds. A camera that
+  does it every time is one Home Assistant cannot take stills from at all,
+  which you can confirm in its own web interface.
+
+@{b}"cannot write T:ami2ha-cam..."@{ub}
+
+  Something else is holding the file. ami2ha writes snapshots to T:, so a
+  full or missing T: assign will do it.
 
 @{b}"could not connect"@{ub}
 

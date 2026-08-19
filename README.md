@@ -9,9 +9,9 @@ ARexx port so the rest of your Workbench can join in.
 > **Status: early, but it works.** Everything below has been run on real
 > AmigaOS 3.2 hardware against a live Home Assistant: reading sensors,
 > flipping switches, the settings window, the ARexx port, Workbench
-> launch, reconnecting after the link drops, and HTTPS — verified against
-> a local reverse proxy and Home Assistant Cloud. What is missing is
-> drag-and-drop reordering; see [Roadmap](#roadmap).
+> launch, reconnecting after the link drops, HTTPS — verified against a
+> local reverse proxy and Home Assistant Cloud — and camera snapshots.
+> What is missing is drag-and-drop reordering; see [Roadmap](#roadmap).
 
 ## Try it
 
@@ -190,6 +190,32 @@ label      amiga
 For an `https://` server add `tls yes` (and `tlsverify no` if the
 certificate is self-signed).
 
+### Cameras
+
+A camera entity becomes a tile showing a snapshot — a still, not video.
+Click it to fetch a new one, or give it a refresh interval:
+
+```
+group "Hof"
+    camera camera.einfahrt label "Einfahrt" width 320 height 180 refresh 300
+end
+```
+
+`width` and `height` are what ami2ha asks Home Assistant for, and it scales
+server-side: 320×180 is about 6 KB against 31 KB for a camera's native frame,
+so they decide the transfer *and* the decoding. Both are required — a width
+alone is silently ignored. `timestamp no` drops the caption showing when the
+picture arrived.
+
+Snapshots come over plain HTTP from `/api/camera_proxy` on a second,
+short-lived connection, so a camera that is slow or broken cannot disturb the
+live dashboard — which matters, because battery cameras routinely take ten
+seconds to answer and refuse the first request while they wake.
+
+This is the one feature with an extra dependency: a **JPEG datatype** must be
+installed, since Home Assistant serves camera stills as JPEG and there is no
+other format to ask for. Nothing else in ami2ha needs one.
+
 Everything carrying that label appears on the Amiga, named by its friendly
 name, with the widget kind inferred from its domain. Add a label in the HA
 UI and it turns up on the next start -- no file to edit on the Amiga.
@@ -274,6 +300,7 @@ back. See [docs/AREXX.md](docs/AREXX.md) for the full command set.
 - [x] Choose entities from within Home Assistant, by label
 - [x] Settings window: groups, choose entities, reorder, save
 - [x] HTTPS via AmiSSL, with certificate and host name verification
+- [x] Camera snapshots as dashboard tiles, scaled server-side
 - [ ] Drag-and-drop reordering (nice-to-have; Up/Down works today)
 - [x] Reconnect handling and connection status UI
 - [x] ARexx host port

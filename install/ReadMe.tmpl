@@ -36,6 +36,8 @@ What you need
         -- the command line modes work without it
     AmiSSL 5, only if you connect over https
         -- opened on demand, so plain http needs nothing
+    a JPEG datatype, only if you put a camera on the dashboard
+        -- akJFIF from Aminet; OS 3.9 and 3.2 ship one
 
 A 68020 is comfortable. The 68000 build works but is slow.
 
@@ -84,6 +86,26 @@ answering, so use it only on a network you trust. The manual has more.
 
 Only CONFIG belongs in the icon's tool types. The address, the token
 file, the label and the whole layout live in the configuration file.
+
+
+Cameras
+-------
+
+A camera entity can go on the dashboard as a snapshot -- a still, not
+video. Click the tile to fetch a new one:
+
+    group "Hof"
+        camera camera.einfahrt label "Einfahrt" width 320 height 180
+    end
+
+The size is what ami2ha asks Home Assistant for, and it scales on the
+server, so it decides how much crosses the network and how much this
+machine has to decode. 320x180 is the default and is about 6 KB against
+31 KB for a camera's full frame.
+
+Add refresh <seconds> for automatic updates; without it a tile only
+updates when you click it. This needs a JPEG datatype installed, and
+nothing else in ami2ha does.
 
 
 The manual

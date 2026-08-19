@@ -23,6 +23,10 @@
  *       toggle light.wohnzimmer             label "Licht"
  *   end
  *
+ *   group "Kameras"
+ *       camera camera.einfahrt  label "Einfahrt" width 320 height 180
+ *   end
+ *
  *   group "Szenen"
  *       button scene.gute_nacht  label "Gute Nacht"
  *       button light.turn_on     label "Hell"  entity light.kueche \

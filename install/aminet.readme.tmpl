@@ -5,8 +5,8 @@ Type:         comm/tcp
 Version:      @VERSION@
 Architecture: m68k-amigaos
 Distribution: Aminet
-Replaces:     comm/tcp/ami2ha-0.1.1.lha
-Requires:     bsdsocket.library; MUI 3.8+ for dashboard; AmiSSL 5 for https
+Replaces:     comm/tcp/ami2ha-0.2.lha
+Requires:     bsdsocket.library; MUI 3.8+; AmiSSL for https; JPEG dt for cams
 
 
 ami2ha -- control your smart home from a real Amiga
@@ -21,6 +21,8 @@ Workbench can join in.
 WHAT IT DOES
 
   - sensors, gauges, toggles and buttons on a configurable MUI dashboard
+  - camera snapshots as tiles, fetched on a click or on a timer, scaled
+    by the server so a 68k only has a small picture to decode
   - pick which entities appear by giving them a label in Home Assistant,
     so you can change what the Amiga shows without touching the Amiga
   - a settings window for grouping, ordering, labelling and choosing how
