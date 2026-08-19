@@ -292,10 +292,21 @@ static void refresh_groups(a2h_editor *ed)
         ed->group_titles[0] = "(no groups)";
     ed->ngroup_titles = ed->cfg->ngroups ? ed->cfg->ngroups : 1;
 
+    /*
+     * Two calls, not one. Handing a Cycle a new list of entries resets it
+     * to the first of them, and it does that while processing the same
+     * taglist -- so an active index set alongside the entries is thrown
+     * away. The gadget then said "Umwelt" while the lists below it showed
+     * whichever group was really being edited.
+     */
     SetAttrs(ed->cyc_group,
              MUIA_NoNotify,      TRUE,
              MUIA_Cycle_Entries, (IPTR)ed->group_titles,
-             MUIA_Cycle_Active,  (IPTR)(ed->group < ed->ngroup_titles ? ed->group : 0),
+             TAG_DONE);
+    SetAttrs(ed->cyc_group,
+             MUIA_NoNotify,      TRUE,
+             MUIA_Cycle_Active,  (IPTR)(ed->group < ed->ngroup_titles
+                                          ? ed->group : 0),
              TAG_DONE);
 
     if (ed->str_group)

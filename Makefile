@@ -96,6 +96,8 @@ DISTLHA     := dist/$(DISTNAME).lha
 
 .PHONY: all clean test dirs dist version-check
 
+all: dirs $(TARGET)
+
 # Nothing outside version.h should name a version. 0.1.1 shipped with a
 # guide that still said 0.1, because three files carried it by hand; the
 # templates fixed those, but a stray archive name in the README would go
@@ -114,8 +116,6 @@ version-check:
 	 fi
 	@echo "version-check: everything agrees on $(VERSION)"
 
-
-all: dirs $(TARGET)
 
 dirs:
 	@mkdir -p $(BUILD)/src/core $(BUILD)/src/net $(BUILD)/src/ha \
