@@ -462,6 +462,15 @@ void ui_rebuild(a2h_ui *ui)
     if (!ui || !ui->root)
         return;
 
+    /*
+     * The column count can have changed in the settings window. It is one
+     * of the few group attributes MUI lets you set after creation
+     * (MUIA_Group_Horiz is not), so the dashboard can re-flow without
+     * rebuilding the window around it.
+     */
+    set(ui->root, MUIA_Group_Columns,
+        (IPTR)(ui->cfg->columns > 0 ? ui->cfg->columns : 1));
+
     DoMethod(ui->root, MUIM_Group_InitChange);
 
     children = NULL;

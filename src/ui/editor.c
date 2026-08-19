@@ -36,6 +36,9 @@ struct a2h_editor {
     Object *bt_add, *bt_remove, *bt_gnew, *bt_gdel;
     Object *bt_up, *bt_down;
     Object *str_group, *str_label, *str_min, *str_max;
+    /* Camera only, and the dashboard-wide column count. */
+    Object *str_refresh, *str_camw, *str_camh;
+    Object *cyc_columns;
     Object *bt_save, *bt_use, *bt_cancel;
 
     a2h_config *cfg;      /* the live configuration, edited on apply */
@@ -110,9 +113,13 @@ HOOKPROTONH(DestructFunc, LONG, APTR pool, ed_row *row)
 }
 MakeStaticHook(DestructHook, DestructFunc);
 
+/* Order must match widget_kind: the cycle's active index is the kind. */
 static const char *kind_labels[] = {
-    "reading", "toggle", "button", "gauge", "text", NULL
+    "reading", "toggle", "button", "gauge", "text", "camera", NULL
 };
+
+/* Dashboard columns, as offered in the cycle. Index + 1 is the value. */
+static const char *column_labels[] = { "1", "2", "3", "4", NULL };
 
 /* ------------------------------------------------------------------ *
  * Building the working copy
@@ -517,6 +524,29 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
     ed->list_kind = MUI_NewObject(MUIC_Cycle,
         MUIA_Cycle_Entries, (IPTR)kind_labels, TAG_DONE);
 
+    /*
+     * Camera settings. The size is what gets asked of Home Assistant, which
+     * scales server-side, so it decides both the transfer and how much
+     * decoding this machine has to do -- not just how big the tile looks.
+     */
+    ed->str_refresh = MUI_NewObject(MUIC_String,
+        MUIA_Frame,          MUIV_Frame_String,
+        MUIA_String_Accept,  (IPTR)"0123456789",
+        MUIA_String_MaxLen,  (IPTR)8,
+        TAG_DONE);
+    ed->str_camw = MUI_NewObject(MUIC_String,
+        MUIA_Frame,          MUIV_Frame_String,
+        MUIA_String_Accept,  (IPTR)"0123456789",
+        MUIA_String_MaxLen,  (IPTR)6,
+        TAG_DONE);
+    ed->str_camh = MUI_NewObject(MUIC_String,
+        MUIA_Frame,          MUIV_Frame_String,
+        MUIA_String_Accept,  (IPTR)"0123456789",
+        MUIA_String_MaxLen,  (IPTR)6,
+        TAG_DONE);
+    ed->cyc_columns = MUI_NewObject(MUIC_Cycle,
+        MUIA_Cycle_Entries, (IPTR)column_labels, TAG_DONE);
+
     ed->bt_add    = make_button("Add >>");
     ed->bt_up     = make_button("Up");
     ed->bt_down   = make_button("Down");
@@ -556,6 +586,10 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
                     MUIA_Text_Contents, (IPTR)"Name:",
                     MUIA_Weight, (IPTR)0, TAG_DONE),
                 MUIA_Group_Child, (IPTR)ed->str_group,
+                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                    MUIA_Text_Contents, (IPTR)"Columns:",
+                    MUIA_Weight, (IPTR)0, TAG_DONE),
+                MUIA_Group_Child, (IPTR)ed->cyc_columns,
                 TAG_DONE),
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
                 MUIA_Group_Horiz, TRUE,
@@ -579,7 +613,12 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
                 MUIA_Group_Child, (IPTR)ed->lv_used,
                 TAG_DONE),
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
-                MUIA_Group_Horiz, TRUE,
+                /*
+                 * A grid of label/gadget pairs rather than one long row.
+                 * Six pairs side by side would run off a 640-wide screen,
+                 * and this wraps them onto as many rows as it needs.
+                 */
+                MUIA_Group_Columns, (IPTR)4,
                 MUIA_Frame,       MUIV_Frame_Group,
                 MUIA_FrameTitle,  (IPTR)"Properties",
                 MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
@@ -598,6 +637,18 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
                     MUIA_Text_Contents, (IPTR)"Max:",
                     MUIA_Weight, (IPTR)0, TAG_DONE),
                 MUIA_Group_Child, (IPTR)ed->str_max,
+                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                    MUIA_Text_Contents, (IPTR)"Refresh s:",
+                    MUIA_Weight, (IPTR)0, TAG_DONE),
+                MUIA_Group_Child, (IPTR)ed->str_refresh,
+                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                    MUIA_Text_Contents, (IPTR)"Width:",
+                    MUIA_Weight, (IPTR)0, TAG_DONE),
+                MUIA_Group_Child, (IPTR)ed->str_camw,
+                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                    MUIA_Text_Contents, (IPTR)"Height:",
+                    MUIA_Weight, (IPTR)0, TAG_DONE),
+                MUIA_Group_Child, (IPTR)ed->str_camh,
                 TAG_DONE),
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
                 MUIA_Group_Horiz, TRUE,
@@ -650,6 +701,17 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_RANGE);
     DoMethod(ed->str_max, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_RANGE);
+    /* Reuse ID_ED_RANGE: every one of these ends in commit_properties,
+     * which is what the handler does before it looks at the id at all. */
+    DoMethod(ed->str_refresh, MUIM_Notify, MUIA_String_Acknowledge,
+             MUIV_EveryTime, (IPTR)app, 2,
+             MUIM_Application_ReturnID, ID_ED_RANGE);
+    DoMethod(ed->str_camw, MUIM_Notify, MUIA_String_Acknowledge,
+             MUIV_EveryTime, (IPTR)app, 2,
+             MUIM_Application_ReturnID, ID_ED_RANGE);
+    DoMethod(ed->str_camh, MUIM_Notify, MUIA_String_Acknowledge,
+             MUIV_EveryTime, (IPTR)app, 2,
+             MUIM_Application_ReturnID, ID_ED_RANGE);
 
     return ed;
 }
@@ -670,6 +732,17 @@ void editor_show(a2h_editor *ed)
 {
     if (!ed)
         return;
+
+    /* Show the dashboard's current column count. Clamped to what the cycle
+     * can offer: a hand-written file may say anything, and an out-of-range
+     * active index would leave the gadget showing something it is not. */
+    {
+        int col = ed->cfg->columns;
+        if (col < 1) col = 1;
+        if (col > 4) col = 4;
+        SetAttrs(ed->cyc_columns, MUIA_NoNotify, TRUE,
+                 MUIA_Cycle_Active, (IPTR)(col - 1), TAG_DONE);
+    }
 
     /* A fresh session starts with nothing held back, so a label from a
      * run the user cancelled cannot come back on an entity they re-add. */
@@ -900,6 +973,38 @@ static void commit_properties(a2h_editor *ed)
                  MUIA_String_Integer, (IPTR)hi, TAG_DONE);
     }
 
+    if (w->kind == W_CAMERA) {
+        LONG secs = 0, cw = 0, chh = 0;
+
+        get(ed->str_refresh, MUIA_String_Integer, &secs);
+        get(ed->str_camw,    MUIA_String_Integer, &cw);
+        get(ed->str_camh,    MUIA_String_Integer, &chh);
+
+        /*
+         * Clamp rather than reject: this is a text field someone is typing
+         * into, and a half-typed "3" should not become an error. The same
+         * bounds the parser enforces, so a hand-edited file and this window
+         * cannot disagree.
+         */
+        if (cw  < 16)   cw  = 16;
+        if (cw  > 1280) cw  = 1280;
+        if (chh < 16)   chh = 16;
+        if (chh > 1280) chh = 1280;
+        if (secs < 0)     secs = 0;
+        if (secs > 86400) secs = 86400;
+
+        w->cam_refresh = (int)secs;
+        w->cam_w       = (int)cw;
+        w->cam_h       = (int)chh;
+
+        SetAttrs(ed->str_camw, MUIA_NoNotify, TRUE,
+                 MUIA_String_Integer, (IPTR)cw, TAG_DONE);
+        SetAttrs(ed->str_camh, MUIA_NoNotify, TRUE,
+                 MUIA_String_Integer, (IPTR)chh, TAG_DONE);
+        SetAttrs(ed->str_refresh, MUIA_NoNotify, TRUE,
+                 MUIA_String_Integer, (IPTR)secs, TAG_DONE);
+    }
+
     pos = row_pos_of(ed, ed->shown, &row);
     if (row && pos >= 0) {
         row_fill(row, ed->ha, row->entity, w->label, w->kind);
@@ -940,6 +1045,12 @@ static void show_properties(a2h_editor *ed)
                  MUIA_Disabled, TRUE, TAG_DONE);
         SetAttrs(ed->str_max, MUIA_NoNotify, TRUE,
                  MUIA_Disabled, TRUE, TAG_DONE);
+        SetAttrs(ed->str_refresh, MUIA_NoNotify, TRUE,
+                 MUIA_Disabled, TRUE, TAG_DONE);
+        SetAttrs(ed->str_camw, MUIA_NoNotify, TRUE,
+                 MUIA_Disabled, TRUE, TAG_DONE);
+        SetAttrs(ed->str_camh, MUIA_NoNotify, TRUE,
+                 MUIA_Disabled, TRUE, TAG_DONE);
         return;
     }
 
@@ -957,6 +1068,22 @@ static void show_properties(a2h_editor *ed)
     SetAttrs(ed->str_max, MUIA_NoNotify, TRUE,
              MUIA_Disabled, !gauge,
              MUIA_String_Integer, (IPTR)w->max, TAG_DONE);
+
+    /* Likewise the camera fields: shown always, live only for a camera, so
+     * it is visible that they exist without pretending they apply. */
+    {
+        int cam = (w->kind == W_CAMERA);
+
+        SetAttrs(ed->str_refresh, MUIA_NoNotify, TRUE,
+                 MUIA_Disabled, !cam,
+                 MUIA_String_Integer, (IPTR)w->cam_refresh, TAG_DONE);
+        SetAttrs(ed->str_camw, MUIA_NoNotify, TRUE,
+                 MUIA_Disabled, !cam,
+                 MUIA_String_Integer, (IPTR)w->cam_w, TAG_DONE);
+        SetAttrs(ed->str_camh, MUIA_NoNotify, TRUE,
+                 MUIA_Disabled, !cam,
+                 MUIA_String_Integer, (IPTR)w->cam_h, TAG_DONE);
+    }
 }
 
 static void set_kind_of_selected(a2h_editor *ed)
@@ -997,6 +1124,13 @@ static void rename_group(a2h_editor *ed)
 
 static int apply(a2h_editor *ed)
 {
+    LONG col = 0;
+
+    /* The column count belongs to the dashboard rather than to any widget,
+     * so it is read here rather than in commit_properties. */
+    get(ed->cyc_columns, MUIA_Cycle_Active, &col);
+    ed->cfg->columns = (int)col + 1;   /* the cycle shows 1..4 */
+
     read_back_order(ed);
     return apply_order(ed);
 }
