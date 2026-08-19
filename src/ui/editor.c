@@ -263,6 +263,26 @@ static void fill_list(Object *list, ed_row *rows, int n)
                  MUIV_List_Insert_Bottom);
 }
 
+/*
+ * Put the current group's title in the Name field.
+ *
+ * Its own function because two paths need it and they used to disagree:
+ * refresh_groups did it, but choosing a different group from the cycle
+ * only refreshed the lists, so the name went on showing the group you had
+ * just left.
+ */
+static void show_group_name(a2h_editor *ed)
+{
+    if (!ed->str_group)
+        return;
+
+    SetAttrs(ed->str_group, MUIA_NoNotify, TRUE,
+             MUIA_String_Contents,
+             (IPTR)(ed->cfg->ngroups && ed->group < ed->cfg->ngroups
+                        ? ed->cfg->groups[ed->group].title : ""),
+             TAG_DONE);
+}
+
 static void refresh_lists(a2h_editor *ed)
 {
     build_pool(ed);
@@ -325,11 +345,7 @@ static void refresh_groups(a2h_editor *ed)
                  TAG_DONE);
     }
 
-    if (ed->str_group)
-        SetAttrs(ed->str_group, MUIA_NoNotify, TRUE,
-                 MUIA_String_Contents,
-                 (IPTR)(ed->cfg->ngroups ? ed->cfg->groups[ed->group].title : ""),
-                 TAG_DONE);
+    show_group_name(ed);
 }
 
 /* ------------------------------------------------------------------ *
@@ -1249,6 +1265,7 @@ int editor_handle(a2h_editor *ed, unsigned long id, int *relayout)
         apply(ed);                 /* keep the edits to the group we leave */
         get(ed->cyc_group, MUIA_Cycle_Active, &sel);
         ed->group = (int)sel;
+        show_group_name(ed);
         refresh_lists(ed);
         break;
     }
