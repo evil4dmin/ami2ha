@@ -94,7 +94,26 @@ DISTNAME    := ami2ha-$(VERSION)
 DISTDIR     := dist/$(DISTNAME)
 DISTLHA     := dist/$(DISTNAME).lha
 
-.PHONY: all clean test dirs dist
+.PHONY: all clean test dirs dist version-check
+
+# Nothing outside version.h should name a version. 0.1.1 shipped with a
+# guide that still said 0.1, because three files carried it by hand; the
+# templates fixed those, but a stray archive name in the README would go
+# stale just as quietly and nothing would say so.
+#
+# The Aminet Replaces: line is exempt: it names the release this one
+# supersedes, which is by definition not $(VERSION).
+version-check:
+	@test -n "$(VERSION)" || { echo "cannot read version"; exit 1; }
+	@bad=`grep -rn 'ami2ha-[0-9][0-9.]*\.lha' README.md docs install 2>/dev/null \
+	      | grep -v 'Replaces:' | grep -v 'ami2ha-$(VERSION)\.lha'`; \
+	 if [ -n "$$bad" ]; then \
+	   echo "version-check: these still name another version, expected $(VERSION):"; \
+	   echo "$$bad"; \
+	   exit 1; \
+	 fi
+	@echo "version-check: everything agrees on $(VERSION)"
+
 
 all: dirs $(TARGET)
 
@@ -118,7 +137,7 @@ test:
 # Both builds are shipped and the installer picks between them: a 68020
 # binary silently fails to run on a 68000, and asking a newcomer which
 # processor they have is a poor first impression.
-dist:
+dist: version-check
 	@test -n "$(VERSION)" || { echo "cannot read version"; exit 1; }
 	@rm -rf $(DISTDIR) $(DISTLHA)
 	@mkdir -p $(DISTDIR)/ami2ha/icons
