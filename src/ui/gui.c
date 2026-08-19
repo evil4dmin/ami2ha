@@ -20,6 +20,8 @@
 
 #include "ami2ha/json.h"
 #include "ami2ha/ui.h"
+#include "ami2ha/camfetch.h"
+#include "campic.h"
 #include "ami2ha/version.h"
 #include "editor.h"
 
@@ -93,6 +95,13 @@ typedef struct {
     Object *value;   /* Text or Gauge showing the state; NULL for buttons */
     Object *control; /* Checkmark or Button; NULL for read-only widgets   */
     char    text[64];/* backing store for MUIA_Text_Contents             */
+
+    /* Camera only. The decoded picture has to outlive the call that made
+     * it, because MUI goes on drawing from that bitmap. */
+    campic  pic;
+    long    cam_next;   /* ui_now() tick of the next automatic refresh */
+    int     cam_slot;   /* which of the two files the picture on screen holds */
+    int     cam_want;   /* the file the fetch in flight is writing to        */
 } ui_widget;
 
 struct a2h_ui {
@@ -115,6 +124,13 @@ struct a2h_ui {
 
     ui_widget  *widgets;
     int         nwidgets;
+
+    /*
+     * One snapshot fetch at a time, whichever tile asked. Several at once
+     * would mean several sockets and several JPEG decodes competing on a
+     * machine that has trouble with one.
+     */
+    camfetch    cam;
 
     a2h_rexx   *rexx;   /* borrowed; may be NULL */
     Object     *root;   /* holds the group boxes; rebuilt by the editor */
@@ -277,6 +293,31 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             TAG_DONE));
         return 1;
 
+    case W_CAMERA:
+        /*
+         * Created empty: the picture cannot be decoded until there is a
+         * screen to remap it onto, and at build time the window has not
+         * been opened yet. The first frame arrives from a fetch.
+         *
+         * InputMode makes the picture itself the refresh control -- there
+         * is no room on a dashboard for a button beside every camera, and
+         * clicking the image is what anyone would try first.
+         */
+        uw->control = MUI_NewObject(MUIC_Bitmap,
+            MUIA_Frame,          MUIV_Frame_ImageButton,
+            MUIA_InputMode,      MUIV_InputMode_RelVerify,
+            MUIA_Background,     MUII_BACKGROUND,
+            MUIA_Bitmap_Width,   (IPTR)w->cam_w,
+            MUIA_Bitmap_Height,  (IPTR)w->cam_h,
+            MUIA_FixWidth,       (IPTR)w->cam_w,
+            MUIA_FixHeight,      (IPTR)w->cam_h,
+            TAG_DONE);
+        if (!uw->control)
+            return 0;
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)uw->control);
+        return 1;
+
     case W_BUTTON:
         uw->control = MUI_NewObject(MUIC_Text,
             MUIA_Text_Contents, (IPTR)w->label,
@@ -316,7 +357,7 @@ static void bind_controls(a2h_ui *ui)
             DoMethod(ui->widgets[i].control, MUIM_Notify, MUIA_Selected,
                      MUIV_EveryTime, (IPTR)ui->app, 2,
                      MUIM_Application_ReturnID, ID_WIDGET_BASE + i);
-        else if (w->kind == W_BUTTON)
+        else if (w->kind == W_BUTTON || w->kind == W_CAMERA)
             DoMethod(ui->widgets[i].control, MUIM_Notify, MUIA_Pressed, FALSE,
                      (IPTR)ui->app, 2,
                      MUIM_Application_ReturnID, ID_WIDGET_BASE + i);
@@ -373,6 +414,19 @@ static void build_groups(a2h_ui *ui)
  * the toggles quietly stopped doing anything. Anything that has to be true
  * of the dashboard belongs in this one function.
  */
+/*
+ * Let go of every decoded picture. MUI must already have been disposed or
+ * pointed elsewhere: the bitmaps belong to the datatype objects freed here,
+ * and MUI would otherwise go on drawing from memory that has been returned.
+ */
+static void free_pictures(a2h_ui *ui)
+{
+    int i;
+
+    for (i = 0; i < ui->nwidgets; i++)
+        campic_free(&ui->widgets[i].pic);
+}
+
 static int build_dashboard(a2h_ui *ui)
 {
     /* The widget table is indexed by configuration order, so it has to
@@ -383,6 +437,8 @@ static int build_dashboard(a2h_ui *ui)
     if (!fresh)
         return 0;
 
+    /* The old objects are gone by now, so nothing is drawing from these. */
+    free_pictures(ui);
     free(ui->widgets);
     ui->widgets  = fresh;
     ui->nwidgets = ui->cfg->nwidgets;
@@ -453,6 +509,7 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
         ui_libs_close();
         return NULL;
     }
+    camfetch_init(&ui->cam);
     ui->cfg  = cfg;
     ui->ha   = ha;
     ui->sock = sock;
@@ -591,10 +648,13 @@ void ui_dispose(a2h_ui *ui)
         return;
     editor_dispose(ui->editor);
     ui->editor = NULL;
+    camfetch_cancel(&ui->cam);
     if (ui->app) {
         set(ui->win, MUIA_Window_Open, FALSE);
         MUI_DisposeObject(ui->app);
     }
+    /* After the objects, so nothing is drawing from these bitmaps. */
+    free_pictures(ui);
     free(ui->widgets);
     free(ui);
     ui_libs_close();
@@ -737,6 +797,165 @@ void ui_refresh_all(a2h_ui *ui)
  * Actions
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * Camera snapshots
+ * ------------------------------------------------------------------ */
+
+/*
+ * Where a snapshot lands on its way to the decoder. T: is RAM on any normal
+ * setup, which matters: this is rewritten every refresh and a real disk
+ * would grind for no reason.
+ *
+ * Two names, used alternately. Datatypes and MUI both key off the file, and
+ * writing over the picture that is currently on screen is asking for a
+ * decoder to read a half-written file.
+ */
+static void snapshot_path(char *out, size_t outsz, int widget, int slot)
+{
+    snprintf(out, outsz, "T:ami2ha-cam%d-%d.jpg", widget, slot ? 1 : 0);
+}
+
+/* Ask for a new frame for widget `i`, unless a fetch is already running. */
+static void request_snapshot(a2h_ui *ui, int i)
+{
+    const a2h_widget *w = &ui->cfg->widgets[i];
+    char              path[CAM_PATH_MAX];
+    char              msg[96];
+
+    if (w->kind != W_CAMERA)
+        return;
+
+    if (camfetch_busy(&ui->cam)) {
+        ui_flash_status(ui, "Already fetching a picture...");
+        return;
+    }
+
+    /*
+     * Alternate, so the file being written is never the one the picture on
+     * screen was decoded from -- the datatype keeps that file open, and
+     * MODE_NEWFILE on it fails with "cannot write the snapshot file".
+     *
+     * Only the displayed slot may be flipped against: testing "is there a
+     * picture" instead would pick slot 1 forever from the second refresh
+     * onwards, which is exactly the case that broke.
+     */
+    ui->widgets[i].cam_want = ui->widgets[i].pic.dt
+                                ? (ui->widgets[i].cam_slot ? 0 : 1)
+                                : 0;
+    snapshot_path(path, sizeof path, i, ui->widgets[i].cam_want);
+
+    if (!camfetch_start(&ui->cam, &ui->ha->cfg, w->entity,
+                        w->cam_w, w->cam_h, path, i, ui_now())) {
+        snprintf(msg, sizeof msg, "%s: %s", w->label,
+                 ui->cam.err[0] ? ui->cam.err : "could not start");
+        ui_flash_status(ui, msg);
+        return;
+    }
+
+    snprintf(msg, sizeof msg, "Fetching %s...", w->label);
+    ui_set_status(ui, msg);
+}
+
+/*
+ * A fetch finished. Decode it onto the window's screen and hand the bitmap
+ * to MUI.
+ */
+static void snapshot_arrived(a2h_ui *ui)
+{
+    int               i = ui->cam.widget;
+    const a2h_widget *w;
+    ui_widget        *uw;
+    struct Screen    *scr = NULL;
+    char              err[96];
+    char              msg[128];
+
+    if (i < 0 || i >= ui->nwidgets)
+        return;
+
+    w  = &ui->cfg->widgets[i];
+    uw = &ui->widgets[i];
+
+    if (!uw->control)
+        return;
+
+    scr = (struct Screen *)xget(ui->win, MUIA_Window_Screen);
+    if (!scr) {
+        ui_set_status_connected(ui);
+        ui_flash_status(ui, "No screen to draw the picture on");
+        return;
+    }
+
+    /*
+     * Point MUI away from the old bitmap before the picture that owns it is
+     * freed, or it would keep drawing from memory that has been given back.
+     */
+    set(uw->control, MUIA_Bitmap_Bitmap, (IPTR)NULL);
+
+    if (!campic_load(&uw->pic, ui->cam.file, scr, err, sizeof err)) {
+        ui_set_status_connected(ui);
+        snprintf(msg, sizeof msg, "%s: %s", w->label, err);
+        ui_flash_status(ui, msg);
+        return;
+    }
+
+    /* campic_load freed the previous picture, so the file it was holding
+     * open is free again and becomes the next target. */
+    uw->cam_slot = uw->cam_want;
+
+    SetAttrs(uw->control,
+             MUIA_Bitmap_Width,  (IPTR)uw->pic.width,
+             MUIA_Bitmap_Height, (IPTR)uw->pic.height,
+             MUIA_Bitmap_Bitmap, (IPTR)uw->pic.bm,
+             TAG_DONE);
+
+    ui_set_status_connected(ui);
+    snprintf(msg, sizeof msg, "%s updated", w->label);
+    ui_flash_status(ui, msg);
+}
+
+/*
+ * Automatic refresh, for cameras configured with one. Deliberately not the
+ * default: a frame costs a transfer and a JPEG decode, and some cameras
+ * take ten seconds to answer, so polling every tile every minute would keep
+ * a slow machine permanently busy for pictures nobody is looking at.
+ */
+static void camera_tick(a2h_ui *ui)
+{
+    long now = ui_now();
+    int  i;
+
+    if (camfetch_busy(&ui->cam))
+        return;
+
+    for (i = 0; i < ui->nwidgets; i++) {
+        const a2h_widget *w  = &ui->cfg->widgets[i];
+        ui_widget        *uw = &ui->widgets[i];
+
+        if (w->kind != W_CAMERA)
+            continue;
+
+        /*
+         * cam_next is 0 until a tile has been asked for once. Every camera
+         * gets that first frame, even a manual one -- an empty frame with
+         * no hint that clicking it would do something is a poor greeting.
+         */
+        if (uw->cam_next == 0) {
+            uw->cam_next = (w->cam_refresh > 0)
+                             ? now + (long)w->cam_refresh * 50L
+                             : -1;   /* manual from here on */
+            request_snapshot(ui, i);
+            return;
+        }
+
+        if (w->cam_refresh <= 0 || uw->cam_next < 0 || now < uw->cam_next)
+            continue;
+
+        uw->cam_next = now + (long)w->cam_refresh * 50L;
+        request_snapshot(ui, i);
+        return;   /* one at a time */
+    }
+}
+
 static void fire_widget(a2h_ui *ui, int i)
 {
     const a2h_widget *w = &ui->cfg->widgets[i];
@@ -769,6 +988,8 @@ static void fire_widget(a2h_ui *ui, int i)
                                    w->data[0] ? w->data : NULL);
             ui_flash_status(ui, w->label);
         }
+    } else if (w->kind == W_CAMERA) {
+        request_snapshot(ui, i);
     }
 }
 
@@ -1052,17 +1273,28 @@ int ui_run(a2h_ui *ui)
 
         {
             int   readable = 0, writable = 0;
+            int   cam_readable = 0, cam_writable = 0;
             int   want_write = net_want_write(ui->sock) ||
                                ha_client_out(ui->ha)->len > 0;
+            int   cam_busy = camfetch_busy(&ui->cam);
             ULONG rexxsig = rexx_sigmask(ui->rexx);
             ULONG fired;
 
-            /* One sleep for MUI, the socket, Ctrl-C and the ARexx port.
+            /* A snapshot in flight must not be polled for: against a
+             * battery camera it can be ten seconds, and this machine has
+             * better things to do than spin. It goes into the same sleep. */
+            if (cam_busy && (wait_ms < 0 || wait_ms > 250))
+                wait_ms = 250;
+
+            /* One sleep for MUI, both sockets, Ctrl-C and the ARexx port.
              * WaitSelect takes the Exec mask MUI just gave us, so nothing
              * polls. */
-            fired = net_wait(ui->sock, want_write,
-                             sigs | SIGBREAKF_CTRL_C | rexxsig, wait_ms,
-                             &readable, &writable);
+            fired = net_wait2(ui->sock, want_write,
+                              cam_busy ? &ui->cam.sock : NULL,
+                              cam_busy ? camfetch_want_write(&ui->cam) : 0,
+                              sigs | SIGBREAKF_CTRL_C | rexxsig, wait_ms,
+                              &readable, &writable,
+                              &cam_readable, &cam_writable);
 
             if (fired & SIGBREAKF_CTRL_C)
                 break;
@@ -1075,6 +1307,27 @@ int ui_run(a2h_ui *ui)
 
             /* Hand MUI back only the signals it asked about. */
             sigs = fired & sigs;
+
+            if (cam_busy) {
+                int r = camfetch_service(&ui->cam, cam_readable, cam_writable,
+                                         ui_now());
+                if (r > 0) {
+                    snapshot_arrived(ui);
+                    camfetch_cancel(&ui->cam);
+                } else if (r < 0) {
+                    char msg[128];
+                    int  i = ui->cam.widget;
+                    ui_set_status_connected(ui);
+                    snprintf(msg, sizeof msg, "%s: %s",
+                             (i >= 0 && i < ui->nwidgets)
+                                 ? ui->cfg->widgets[i].label : "Camera",
+                             ui->cam.err);
+                    ui_flash_status(ui, msg);
+                    camfetch_cancel(&ui->cam);
+                }
+            }
+
+            camera_tick(ui);
 
             service_socket(ui, readable, writable);
         }

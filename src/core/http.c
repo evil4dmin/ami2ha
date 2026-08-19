@@ -26,6 +26,30 @@ int http_build_ws_upgrade(a2h_buf *out, const char *host, int port,
     return !out->failed;
 }
 
+int http_build_get(a2h_buf *out, const char *host, int port,
+                   const char *path, const char *token)
+{
+    buf_printf(out, "GET %s HTTP/1.1\r\n", path && *path ? path : "/");
+
+    /* Same reasoning as the upgrade: some reverse proxies in front of Home
+     * Assistant match on the Host header, and a default port spelled out
+     * does not always match. */
+    if (port == 80 || port == 443)
+        buf_printf(out, "Host: %s\r\n", host);
+    else
+        buf_printf(out, "Host: %s:%d\r\n", host, port);
+
+    if (token && *token)
+        buf_printf(out, "Authorization: Bearer %s\r\n", token);
+
+    buf_append_str(out, "Accept: image/jpeg\r\n");
+    buf_append_str(out, "User-Agent: ami2ha (AmigaOS)\r\n");
+    buf_append_str(out, "Connection: close\r\n");
+    buf_append_str(out, "\r\n");
+
+    return !out->failed;
+}
+
 static int ci_equal(const char *a, size_t alen, const char *b)
 {
     size_t i;

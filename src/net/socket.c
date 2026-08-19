@@ -293,26 +293,36 @@ long net_recv(a2h_socket *s, void *data, size_t n)
     return NET_ERROR;
 }
 
-unsigned long net_wait(a2h_socket *s, int want_write, unsigned long sigmask,
-                       long timeout_ms, int *readable, int *writable)
+unsigned long net_wait2(a2h_socket *a, int a_want_write,
+                        a2h_socket *b, int b_want_write,
+                        unsigned long sigmask, long timeout_ms,
+                        int *a_readable, int *a_writable,
+                        int *b_readable, int *b_writable)
 {
     fd_set             rd, wr;
     struct a2h_timeval tv;
-    unsigned long  sigs = sigmask;
-    long           rc;
-    long           nfds = 0;
+    unsigned long      sigs = sigmask;
+    long               rc;
+    long               nfds = 0;
+    int                want_write = 0;
 
-    if (readable) *readable = 0;
-    if (writable) *writable = 0;
+    if (a_readable) *a_readable = 0;
+    if (a_writable) *a_writable = 0;
+    if (b_readable) *b_readable = 0;
+    if (b_writable) *b_writable = 0;
 
     FD_ZERO(&rd);
     FD_ZERO(&wr);
 
-    if (s && s->sock >= 0) {
-        FD_SET(s->sock, &rd);
-        if (want_write)
-            FD_SET(s->sock, &wr);
-        nfds = s->sock + 1;
+    if (a && a->sock >= 0) {
+        FD_SET(a->sock, &rd);
+        if (a_want_write) { FD_SET(a->sock, &wr); want_write = 1; }
+        if (a->sock + 1 > nfds) nfds = a->sock + 1;
+    }
+    if (b && b->sock >= 0) {
+        FD_SET(b->sock, &rd);
+        if (b_want_write) { FD_SET(b->sock, &wr); want_write = 1; }
+        if (b->sock + 1 > nfds) nfds = b->sock + 1;
     }
 
     if (timeout_ms >= 0) {
@@ -325,12 +335,25 @@ unsigned long net_wait(a2h_socket *s, int want_write, unsigned long sigmask,
     rc = WaitSelect(nfds, &rd, want_write ? &wr : NULL, NULL,
                     timeout_ms >= 0 ? (struct timeval *)&tv : NULL, &sigs);
 
-    if (rc > 0 && s && s->sock >= 0) {
-        if (readable && FD_ISSET(s->sock, &rd))
-            *readable = 1;
-        if (want_write && writable && FD_ISSET(s->sock, &wr))
-            *writable = 1;
+    if (rc > 0) {
+        if (a && a->sock >= 0) {
+            if (a_readable && FD_ISSET(a->sock, &rd)) *a_readable = 1;
+            if (a_want_write && a_writable && FD_ISSET(a->sock, &wr))
+                *a_writable = 1;
+        }
+        if (b && b->sock >= 0) {
+            if (b_readable && FD_ISSET(b->sock, &rd)) *b_readable = 1;
+            if (b_want_write && b_writable && FD_ISSET(b->sock, &wr))
+                *b_writable = 1;
+        }
     }
 
     return sigs;
+}
+
+unsigned long net_wait(a2h_socket *s, int want_write, unsigned long sigmask,
+                       long timeout_ms, int *readable, int *writable)
+{
+    return net_wait2(s, want_write, NULL, 0, sigmask, timeout_ms,
+                     readable, writable, NULL, NULL);
 }

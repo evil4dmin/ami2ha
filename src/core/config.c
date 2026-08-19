@@ -58,6 +58,7 @@ const char *cfg_widget_kind_name(widget_kind k)
     case W_BUTTON: return "button";
     case W_GAUGE:  return "gauge";
     case W_TEXT:   return "text";
+    case W_CAMERA: return "camera";
     }
     return "?";
 }
@@ -276,6 +277,7 @@ static int widget_kind_from(const char *t, widget_kind *k)
     if (strcmp(t, "button") == 0) { *k = W_BUTTON; return 1; }
     if (strcmp(t, "gauge")  == 0) { *k = W_GAUGE;  return 1; }
     if (strcmp(t, "text")   == 0) { *k = W_TEXT;   return 1; }
+    if (strcmp(t, "camera") == 0) { *k = W_CAMERA; return 1; }
     return 0;
 }
 
@@ -368,6 +370,24 @@ static void parse_widget(cfg_scan *s, a2h_config *cfg, widget_kind kind)
                 return;
             }
             if (is_min) w->min = v; else w->max = v;
+        } else if (strcmp(tok, "width")  == 0 ||
+                   strcmp(tok, "height") == 0) {
+            long v;
+            int  is_w = (tok[0] == 'w');
+            if (!next_token(s, val, sizeof val) || !parse_long(val, &v) ||
+                v < 16 || v > 1280) {
+                cfg_fail(s, "expected 16 to 1280 after", is_w ? "width" : "height");
+                return;
+            }
+            if (is_w) w->cam_w = (int)v; else w->cam_h = (int)v;
+        } else if (strcmp(tok, "refresh") == 0) {
+            long v;
+            if (!next_token(s, val, sizeof val) || !parse_long(val, &v) ||
+                v < 0 || v > 86400) {
+                cfg_fail(s, "refresh must be 0 (manual) to 86400 seconds", NULL);
+                return;
+            }
+            w->cam_refresh = (int)v;
         } else if (strcmp(tok, "decimals") == 0) {
             long v;
             if (!next_token(s, val, sizeof val) || !parse_long(val, &v) ||
@@ -380,6 +400,14 @@ static void parse_widget(cfg_scan *s, a2h_config *cfg, widget_kind kind)
             cfg_fail(s, "unknown widget option", tok);
             return;
         }
+    }
+
+    if (kind == W_CAMERA) {
+        /* Without a size Home Assistant sends the camera's native frame,
+         * which is 1280x720 on most of them -- five times the bytes and far
+         * more decoding than a dashboard tile needs. */
+        if (w->cam_w <= 0) w->cam_w = 320;
+        if (w->cam_h <= 0) w->cam_h = 180;
     }
 
     if (kind == W_GAUGE && w->max <= w->min) {
@@ -533,6 +561,9 @@ static widget_kind kind_for_domain(const char *domain)
         strcmp(domain, "automation")    == 0)
         return W_TOGGLE;
 
+    if (strcmp(domain, "camera") == 0)
+        return W_CAMERA;
+
     if (strcmp(domain, "scene")        == 0 ||
         strcmp(domain, "script")       == 0 ||
         strcmp(domain, "button")       == 0 ||
@@ -595,6 +626,15 @@ int cfg_add_discovered(a2h_config *cfg, const char *entity_id,
             sprintf(w->service, "%.20s.press", dom);
         else
             sprintf(w->service, "%.20s.turn_on", dom);
+    }
+
+    if (w->kind == W_CAMERA) {
+        /* Same defaults a hand-written camera line gets. Updating only when
+         * asked is the right default for a discovered camera too: labelling
+         * four of them should not put the machine to work every minute. */
+        w->cam_w       = 320;
+        w->cam_h       = 180;
+        w->cam_refresh = 0;
     }
 
     label_from_entity(w->label, sizeof w->label, entity_id);
@@ -785,7 +825,14 @@ int cfg_write(const a2h_config *cfg, a2h_buf *out)
 
             if (w->kind == W_GAUGE)
                 buf_printf(out, " min %ld max %ld", w->min, w->max);
-            if (w->decimals != 1)
+            if (w->kind == W_CAMERA) {
+                buf_printf(out, " width %d height %d", w->cam_w, w->cam_h);
+                if (w->cam_refresh > 0)
+                    buf_printf(out, " refresh %d", w->cam_refresh);
+            }
+            /* decimals is meaningless on a picture, and writing it would
+             * only invite someone to set it. */
+            if (w->decimals != 1 && w->kind != W_CAMERA)
                 buf_printf(out, " decimals %d", w->decimals);
             if (w->kind == W_BUTTON && w->data[0]) {
                 buf_append_str(out, " data ");

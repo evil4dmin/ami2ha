@@ -116,6 +116,90 @@ static void test_tls_survives_a_write(void)
     cfg_free(&back);
 }
 
+static void test_camera_widget(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX];
+
+    CHECK(parse(&cfg,
+        "group \"Hof\"\n"
+        "    camera camera.einfahrt label \"Einfahrt\" width 320 height 180\n"
+        "    camera camera.tuer\n"
+        "end\n", err, sizeof err));
+
+    CHECK_INT(cfg.nwidgets, 2);
+    CHECK_INT(cfg.widgets[0].kind, W_CAMERA);
+    CHECK_STR(cfg.widgets[0].entity, "camera.einfahrt");
+    CHECK_STR(cfg.widgets[0].label, "Einfahrt");
+    CHECK_INT(cfg.widgets[0].cam_w, 320);
+    CHECK_INT(cfg.widgets[0].cam_h, 180);
+    /* Manual refresh unless asked otherwise: decoding costs real time. */
+    CHECK_INT(cfg.widgets[0].cam_refresh, 0);
+
+    /* A camera with no size still gets one. Asking Home Assistant for
+     * nothing means it sends the native frame -- five times the bytes. */
+    CHECK_INT(cfg.widgets[1].cam_w, 320);
+    CHECK_INT(cfg.widgets[1].cam_h, 180);
+    cfg_free(&cfg);
+}
+
+static void test_camera_rejects_silly_sizes(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX];
+
+    CHECK(!parse(&cfg, "group \"g\"\n camera camera.a width 4000\n end\n",
+                 err, sizeof err));
+    cfg_free(&cfg);
+    CHECK(!parse(&cfg, "group \"g\"\n camera camera.a height 0\n end\n",
+                 err, sizeof err));
+    cfg_free(&cfg);
+    CHECK(!parse(&cfg, "group \"g\"\n camera camera.a refresh -5\n end\n",
+                 err, sizeof err));
+    cfg_free(&cfg);
+}
+
+static void test_camera_survives_a_write(void)
+{
+    a2h_config cfg, back;
+    char       err[CFG_ERR_MAX];
+    a2h_buf    out;
+
+    CHECK(parse(&cfg,
+        "group \"Hof\"\n"
+        "    camera camera.einfahrt label \"Einfahrt\" width 640 height 360 refresh 300\n"
+        "end\n", err, sizeof err));
+
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(parse(&back, (const char *)out.data, err, sizeof err));
+    CHECK_INT(back.nwidgets, 1);
+    CHECK_INT(back.widgets[0].kind, W_CAMERA);
+    CHECK_INT(back.widgets[0].cam_w, 640);
+    CHECK_INT(back.widgets[0].cam_h, 360);
+    CHECK_INT(back.widgets[0].cam_refresh, 300);
+
+    buf_free(&out);
+    cfg_free(&cfg);
+    cfg_free(&back);
+}
+
+static void test_camera_discovered_from_label(void)
+{
+    a2h_config cfg;
+
+    /* A camera carrying the label becomes a camera tile, the same way a
+     * switch becomes a toggle -- no separate selection mechanism. */
+    cfg_init(&cfg);
+    CHECK(cfg_add_discovered(&cfg, "camera.hof", "amiga"));
+    CHECK(cfg_add_discovered(&cfg, "switch.lamp", "amiga"));
+    CHECK_INT(cfg.widgets[0].kind, W_CAMERA);
+    CHECK_INT(cfg.widgets[0].cam_w, 320);
+    CHECK_INT(cfg.widgets[0].cam_h, 180);
+    CHECK_INT(cfg.widgets[1].kind, W_TOGGLE);
+    cfg_free(&cfg);
+}
+
 static void test_groups_and_widgets(void)
 {
     a2h_config cfg;
@@ -594,6 +678,10 @@ void suite_config(void)
     RUN(test_tls_defaults_off_but_verified);
     RUN(test_tls_spellings);
     RUN(test_tls_survives_a_write);
+    RUN(test_camera_widget);
+    RUN(test_camera_rejects_silly_sizes);
+    RUN(test_camera_survives_a_write);
+    RUN(test_camera_discovered_from_label);
     RUN(test_groups_and_widgets);
     RUN(test_label_defaults_from_entity);
     RUN(test_button_with_json_data);

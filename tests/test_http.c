@@ -130,6 +130,40 @@ static void test_malformed(void)
     CHECK_INT(http_parse_response(badcode, strlen(badcode), &r), -1);
 }
 
+static void test_build_get_for_a_snapshot(void)
+{
+    a2h_buf out;
+    const char *t;
+
+    buf_init(&out);
+    CHECK(http_build_get(&out, "ha.local", 8123,
+                         "/api/camera_proxy/camera.hof?width=320&height=180",
+                         "SECRET-TOKEN"));
+    buf_append_byte(&out, 0);
+    t = (const char *)out.data;
+
+    CHECK(strstr(t, "GET /api/camera_proxy/camera.hof?width=320&height=180 HTTP/1.1\r\n") != NULL);
+    CHECK(strstr(t, "Host: ha.local:8123\r\n") != NULL);
+    CHECK(strstr(t, "Authorization: Bearer SECRET-TOKEN\r\n") != NULL);
+    /* One request per socket; no second connection is kept alive. */
+    CHECK(strstr(t, "Connection: close\r\n") != NULL);
+    /* The token must never reach the request line: URLs get logged, and
+     * this one opens the whole house. */
+    CHECK(strstr(t, "token=") == NULL);
+    buf_free(&out);
+}
+
+static void test_build_get_omits_default_ports(void)
+{
+    a2h_buf out;
+
+    buf_init(&out);
+    CHECK(http_build_get(&out, "ha.example.com", 443, "/x", "T"));
+    buf_append_byte(&out, 0);
+    CHECK(strstr((const char *)out.data, "Host: ha.example.com\r\n") != NULL);
+    buf_free(&out);
+}
+
 void suite_http(void)
 {
     RUN(test_build_upgrade);
@@ -139,4 +173,6 @@ void suite_http(void)
     RUN(test_incomplete_headers);
     RUN(test_error_responses);
     RUN(test_malformed);
+    RUN(test_build_get_for_a_snapshot);
+    RUN(test_build_get_omits_default_ports);
 }

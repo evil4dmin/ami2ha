@@ -58,7 +58,8 @@ typedef enum {
     W_TOGGLE,     /* checkbox bound to an on/off entity    */
     W_BUTTON,     /* fires a service call                  */
     W_GAUGE,      /* value drawn as a bar between min/max  */
-    W_TEXT        /* static caption, no entity             */
+    W_TEXT,       /* static caption, no entity             */
+    W_CAMERA      /* snapshot from a camera entity          */
 } widget_kind;
 
 typedef struct {
@@ -69,6 +70,19 @@ typedef struct {
     char        data[CFG_DATA_MAX];       /* button: raw JSON service data */
     long        min, max;                 /* gauge range   */
     int         decimals;                 /* gauge scaling */
+    /*
+     * Camera only. The size is asked of Home Assistant rather than scaled
+     * here: it will resize server-side, which turns a 31 KB 1280x720 frame
+     * into about 6 KB at 320x180 and saves the Amiga both the transfer and
+     * the decoding. Both dimensions must be sent -- a width on its own is
+     * silently ignored.
+     *
+     * cam_refresh is seconds between automatic updates; 0 means only when
+     * asked, which is the sensible default when decoding a JPEG costs real
+     * time on a 68k.
+     */
+    int         cam_w, cam_h;
+    int         cam_refresh;
     int         group;                    /* owning group index */
 } a2h_widget;
 

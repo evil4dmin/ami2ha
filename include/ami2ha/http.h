@@ -39,6 +39,21 @@ int http_build_ws_upgrade(a2h_buf *out, const char *host, int port,
                           const char *path, const char *key);
 
 /*
+ * Build a plain GET, used for camera snapshots -- the WebSocket API has no
+ * command that hands back an image, so those come over ordinary HTTP.
+ *
+ * `token` is the same long-lived access token the WebSocket authenticates
+ * with, sent as a Bearer header. It must not be put in the path: URLs end up
+ * in server logs, and this one would be a key to the whole house.
+ *
+ * Asks for a connection close, since one request per socket is simpler than
+ * keeping a second connection alive alongside the WebSocket, and a snapshot
+ * is not fetched often enough for the handshake cost to matter.
+ */
+int http_build_get(a2h_buf *out, const char *host, int port,
+                   const char *path, const char *token);
+
+/*
  * Parse a response header block.
  *   1  headers complete; *r is filled in
  *   0  need more data

@@ -124,6 +124,19 @@ unsigned long net_wait(a2h_socket *s, int want_write, unsigned long sigmask,
                        long timeout_ms, int *readable, int *writable);
 
 /*
+ * As net_wait, but watching two sockets at once. The dashboard needs this:
+ * a camera snapshot is fetched on a second, short-lived connection, and one
+ * of these can take ten seconds against a battery camera. Polling it would
+ * either burn a slow machine's CPU or stall the WebSocket, so both go into
+ * the same WaitSelect. Either socket may be NULL.
+ */
+unsigned long net_wait2(a2h_socket *a, int a_want_write,
+                        a2h_socket *b, int b_want_write,
+                        unsigned long sigmask, long timeout_ms,
+                        int *a_readable, int *a_writable,
+                        int *b_readable, int *b_writable);
+
+/*
  * Whether the transport itself needs the socket to become writable. A TLS
  * handshake or a renegotiation can block on writability in the middle of
  * what looks from above like a read, so callers must OR this into the
