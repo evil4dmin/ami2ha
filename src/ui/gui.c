@@ -17,6 +17,7 @@
 #include <proto/muimaster.h>
 #include <proto/intuition.h>
 #include <proto/dos.h>
+#include <dos/datetime.h>
 
 #include "ami2ha/json.h"
 #include "ami2ha/ui.h"
@@ -99,6 +100,8 @@ typedef struct {
     /* Camera only. The decoded picture has to outlive the call that made
      * it, because MUI goes on drawing from that bitmap. */
     campic  pic;
+    Object *stamp;      /* caption under a camera tile, or NULL */
+    char    stamp_text[24];
     long    cam_next;   /* ui_now() tick of the next automatic refresh */
     int     cam_slot;   /* which of the two files the picture on screen holds */
     int     cam_want;   /* the file the fetch in flight is writing to        */
@@ -315,7 +318,32 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
         if (!uw->control)
             return 0;
         DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
-        DoMethod(parent, OM_ADDMEMBER, (IPTR)uw->control);
+
+        if (w->cam_stamp) {
+            /* The picture and its caption share the cell, so the grid is
+             * still two columns and the camera row still lines up with the
+             * readings above it. */
+            Object *cell;
+
+            strcpy(uw->stamp_text, "--");
+            uw->stamp = MUI_NewObject(MUIC_Text,
+                MUIA_Text_Contents, (IPTR)uw->stamp_text,
+                MUIA_Text_PreParse, (IPTR)"\33c",
+                MUIA_Font,          (IPTR)MUIV_Font_Tiny,
+                TAG_DONE);
+            cell = MUI_NewObject(MUIC_Group,
+                MUIA_Group_Child, (IPTR)uw->control,
+                MUIA_Group_Child, (IPTR)uw->stamp,
+                TAG_DONE);
+            if (!cell || !uw->stamp) {
+                uw->stamp = NULL;
+                DoMethod(parent, OM_ADDMEMBER, (IPTR)uw->control);
+                return 1;
+            }
+            DoMethod(parent, OM_ADDMEMBER, (IPTR)cell);
+        } else {
+            DoMethod(parent, OM_ADDMEMBER, (IPTR)uw->control);
+        }
         return 1;
 
     case W_BUTTON:
@@ -824,6 +852,48 @@ static void snapshot_path(char *out, size_t outsz, int widget, int slot)
     snprintf(out, outsz, "T:ami2ha-cam%d-%d.jpg", widget, slot ? 1 : 0);
 }
 
+/*
+ * Caption a camera tile with the time its picture arrived.
+ *
+ * This is the Amiga's clock, not the camera's: it says when ami2ha last
+ * looked, which is the thing the tile cannot otherwise tell you. Most
+ * cameras burn their own timestamp into the image, and that one is the
+ * moment the shutter fired -- the two are not the same, and on a camera
+ * that takes ten seconds to wake they can differ by that much.
+ *
+ * DateToStr rather than arithmetic on the DateStamp: it honours the
+ * user's locale settings, so the date reads the way the rest of their
+ * Workbench does.
+ */
+static void stamp_now(a2h_ui *ui, int i)
+{
+    ui_widget       *uw = &ui->widgets[i];
+    struct DateTime  dt;
+    char             date[LEN_DATSTRING], time[LEN_DATSTRING];
+
+    if (!uw->stamp)
+        return;
+
+    memset(&dt, 0, sizeof dt);
+    DateStamp(&dt.dat_Stamp);
+    dt.dat_Format  = FORMAT_DOS;
+    dt.dat_StrDate = (STRPTR)date;
+    dt.dat_StrTime = (STRPTR)time;
+    date[0] = time[0] = '\0';
+
+    if (!DateToStr(&dt)) {
+        strcpy(uw->stamp_text, "--");
+    } else {
+        /* Seconds are noise on a tile that updates every few minutes. */
+        char *colon = strrchr(time, ':');
+        if (colon)
+            *colon = '\0';
+        snprintf(uw->stamp_text, sizeof uw->stamp_text, "%s %s", date, time);
+    }
+
+    set(uw->stamp, MUIA_Text_Contents, (IPTR)uw->stamp_text);
+}
+
 /* Ask for a new frame for widget `i`, unless a fetch is already running. */
 static void request_snapshot(a2h_ui *ui, int i)
 {
@@ -916,6 +986,8 @@ static void snapshot_arrived(a2h_ui *ui)
              MUIA_Bitmap_Height, (IPTR)uw->pic.height,
              MUIA_Bitmap_Bitmap, (IPTR)uw->pic.bm,
              TAG_DONE);
+
+    stamp_now(ui, i);
 
     ui_set_status_connected(ui);
     snprintf(msg, sizeof msg, "%s updated", w->label);

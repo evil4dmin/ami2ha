@@ -309,6 +309,7 @@ static void parse_widget(cfg_scan *s, a2h_config *cfg, widget_kind kind)
     char        tok[CFG_DATA_MAX];
     int         have_label = 0;
 
+    int saw_stamp  = 0;   /* did the line mention timestamp at all? */
     if (cfg->ngroups == 0) {
         cfg_fail(s, "widget outside any group", NULL);
         return;
@@ -382,6 +383,14 @@ static void parse_widget(cfg_scan *s, a2h_config *cfg, widget_kind kind)
                 return;
             }
             if (is_w) w->cam_w = (int)v; else w->cam_h = (int)v;
+        } else if (strcmp(tok, "timestamp") == 0) {
+            int on;
+            if (!next_token(s, val, sizeof val) || !parse_bool(val, &on)) {
+                cfg_fail(s, "expected yes or no after", "timestamp");
+                return;
+            }
+            w->cam_stamp = on;
+            saw_stamp    = 1;
         } else if (strcmp(tok, "refresh") == 0) {
             long v;
             if (!next_token(s, val, sizeof val) || !parse_long(val, &v) ||
@@ -410,6 +419,7 @@ static void parse_widget(cfg_scan *s, a2h_config *cfg, widget_kind kind)
          * more decoding than a dashboard tile needs. */
         if (w->cam_w <= 0) w->cam_w = 320;
         if (w->cam_h <= 0) w->cam_h = 180;
+        if (!saw_stamp)    w->cam_stamp = 1;
     }
 
     if (kind == W_GAUGE && w->max <= w->min) {
@@ -637,6 +647,7 @@ int cfg_add_discovered(a2h_config *cfg, const char *entity_id,
         w->cam_w       = 320;
         w->cam_h       = 180;
         w->cam_refresh = 0;
+        w->cam_stamp   = 1;
     }
 
     label_from_entity(w->label, sizeof w->label, entity_id);
@@ -831,6 +842,10 @@ int cfg_write(const a2h_config *cfg, a2h_buf *out)
                 buf_printf(out, " width %d height %d", w->cam_w, w->cam_h);
                 if (w->cam_refresh > 0)
                     buf_printf(out, " refresh %d", w->cam_refresh);
+                /* Written only when off: it is on by default, and saying so
+                 * on every camera line would be noise. */
+                if (!w->cam_stamp)
+                    buf_append_str(out, " timestamp no");
             }
             /* decimals is meaningless on a picture, and writing it would
              * only invite someone to set it. */

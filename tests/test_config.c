@@ -232,6 +232,51 @@ static void test_discovered_labels_are_not_explicit(void)
     cfg_free(&cfg);
 }
 
+static void test_camera_timestamp_is_optional(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX];
+
+    /* On unless the line says otherwise: someone who asked for a camera
+     * wants to know how old the picture is. */
+    CHECK(parse(&cfg, "group \"g\"\n camera camera.a\n end\n",
+                err, sizeof err));
+    CHECK_INT(cfg.widgets[0].cam_stamp, 1);
+    cfg_free(&cfg);
+
+    CHECK(parse(&cfg,
+        "group \"g\"\n camera camera.a timestamp no\n end\n",
+        err, sizeof err));
+    CHECK_INT(cfg.widgets[0].cam_stamp, 0);
+    cfg_free(&cfg);
+
+    CHECK(!parse(&cfg, "group \"g\"\n camera camera.a timestamp perhaps\n end\n",
+                 err, sizeof err));
+    cfg_free(&cfg);
+}
+
+static void test_camera_timestamp_survives_a_write(void)
+{
+    a2h_config cfg, back;
+    char       err[CFG_ERR_MAX];
+    a2h_buf    out;
+
+    /* Turning it off is the setting worth losing track of: the default
+     * would quietly put the caption back on the next save. */
+    CHECK(parse(&cfg,
+        "group \"g\"\n camera camera.a timestamp no\n end\n",
+        err, sizeof err));
+
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(parse(&back, (const char *)out.data, err, sizeof err));
+    CHECK_INT(back.widgets[0].cam_stamp, 0);
+
+    buf_free(&out);
+    cfg_free(&cfg);
+    cfg_free(&back);
+}
+
 static void test_groups_and_widgets(void)
 {
     a2h_config cfg;
@@ -716,6 +761,8 @@ void suite_config(void)
     RUN(test_camera_discovered_from_label);
     RUN(test_hand_written_labels_are_marked);
     RUN(test_discovered_labels_are_not_explicit);
+    RUN(test_camera_timestamp_is_optional);
+    RUN(test_camera_timestamp_survives_a_write);
     RUN(test_groups_and_widgets);
     RUN(test_label_defaults_from_entity);
     RUN(test_button_with_json_data);

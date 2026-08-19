@@ -37,7 +37,7 @@ struct a2h_editor {
     Object *bt_up, *bt_down;
     Object *str_group, *str_label, *str_min, *str_max;
     /* Camera only, and the dashboard-wide column count. */
-    Object *str_refresh, *str_camw, *str_camh;
+    Object *str_refresh, *str_camw, *str_camh, *cm_stamp;
     Object *cyc_columns;
     Object *bt_save, *bt_use, *bt_cancel;
 
@@ -544,6 +544,13 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
         MUIA_String_Accept,  (IPTR)"0123456789",
         MUIA_String_MaxLen,  (IPTR)6,
         TAG_DONE);
+    ed->cm_stamp = MUI_NewObject(MUIC_Image,
+        MUIA_Frame,        MUIV_Frame_ImageButton,
+        MUIA_InputMode,    MUIV_InputMode_Toggle,
+        MUIA_Image_Spec,   (IPTR)MUII_CheckMark,
+        MUIA_ShowSelState, FALSE,
+        MUIA_Background,   MUII_ButtonBack,
+        TAG_DONE);
     ed->cyc_columns = MUI_NewObject(MUIC_Cycle,
         MUIA_Cycle_Entries, (IPTR)column_labels, TAG_DONE);
 
@@ -649,6 +656,17 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
                     MUIA_Text_Contents, (IPTR)"Height:",
                     MUIA_Weight, (IPTR)0, TAG_DONE),
                 MUIA_Group_Child, (IPTR)ed->str_camh,
+                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                    MUIA_Text_Contents, (IPTR)"Show time:",
+                    MUIA_Weight, (IPTR)0, TAG_DONE),
+                /* Keep the checkmark its natural size rather than stretched
+                 * across the cell, as the dashboard's toggles do. */
+                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
+                    MUIA_Group_Horiz, TRUE,
+                    MUIA_Group_Child, (IPTR)ed->cm_stamp,
+                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Rectangle,
+                        TAG_DONE),
+                    TAG_DONE),
                 TAG_DONE),
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
                 MUIA_Group_Horiz, TRUE,
@@ -712,6 +730,8 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
     DoMethod(ed->str_camh, MUIM_Notify, MUIA_String_Acknowledge,
              MUIV_EveryTime, (IPTR)app, 2,
              MUIM_Application_ReturnID, ID_ED_RANGE);
+    DoMethod(ed->cm_stamp, MUIM_Notify, MUIA_Selected, MUIV_EveryTime,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_RANGE);
 
     return ed;
 }
@@ -993,6 +1013,12 @@ static void commit_properties(a2h_editor *ed)
         if (secs < 0)     secs = 0;
         if (secs > 86400) secs = 86400;
 
+        {
+            LONG on = 0;
+            get(ed->cm_stamp, MUIA_Selected, &on);
+            w->cam_stamp = on ? 1 : 0;
+        }
+
         w->cam_refresh = (int)secs;
         w->cam_w       = (int)cw;
         w->cam_h       = (int)chh;
@@ -1051,6 +1077,8 @@ static void show_properties(a2h_editor *ed)
                  MUIA_Disabled, TRUE, TAG_DONE);
         SetAttrs(ed->str_camh, MUIA_NoNotify, TRUE,
                  MUIA_Disabled, TRUE, TAG_DONE);
+        SetAttrs(ed->cm_stamp, MUIA_NoNotify, TRUE,
+                 MUIA_Disabled, TRUE, TAG_DONE);
         return;
     }
 
@@ -1083,6 +1111,9 @@ static void show_properties(a2h_editor *ed)
         SetAttrs(ed->str_camh, MUIA_NoNotify, TRUE,
                  MUIA_Disabled, !cam,
                  MUIA_String_Integer, (IPTR)w->cam_h, TAG_DONE);
+        SetAttrs(ed->cm_stamp, MUIA_NoNotify, TRUE,
+                 MUIA_Disabled, !cam,
+                 MUIA_Selected, (IPTR)(cam && w->cam_stamp), TAG_DONE);
     }
 }
 

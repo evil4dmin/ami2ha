@@ -84,6 +84,13 @@ typedef struct {
     int         cam_w, cam_h;
     int         cam_refresh;
     /*
+     * Caption the tile with the time the snapshot arrived. Optional
+     * because most cameras burn their own timestamp into the picture, and
+     * two of them on one tile is just clutter -- but that one is the
+     * camera's clock, and this one says when ami2ha actually looked.
+     */
+    int         cam_stamp;
+    /*
      * The label was written in the file rather than derived from the entity
      * id. Home Assistant's friendly name is the better caption for a widget
      * that was discovered by label -- but not for one someone named
