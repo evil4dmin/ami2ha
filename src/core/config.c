@@ -59,6 +59,7 @@ const char *cfg_widget_kind_name(widget_kind k)
     case W_GAUGE:  return "gauge";
     case W_TEXT:   return "text";
     case W_CAMERA: return "camera";
+    case W_MEDIA:  return "media";
     }
     return "?";
 }
@@ -278,6 +279,7 @@ static int widget_kind_from(const char *t, widget_kind *k)
     if (strcmp(t, "gauge")  == 0) { *k = W_GAUGE;  return 1; }
     if (strcmp(t, "text")   == 0) { *k = W_TEXT;   return 1; }
     if (strcmp(t, "camera") == 0) { *k = W_CAMERA; return 1; }
+    if (strcmp(t, "media")  == 0) { *k = W_MEDIA;  return 1; }
     return 0;
 }
 
@@ -496,6 +498,11 @@ int cfg_parse(a2h_config *cfg, const char *text, size_t len,
             } else if (strcmp(tok, "host") == 0) {
                 if (next_token(&s, tok, sizeof tok))
                     copy_str(cfg->host, sizeof cfg->host, tok);
+            } else if (strcmp(tok, "savedir") == 0) {
+                if (next_token(&s, tok, sizeof tok))
+                    copy_str(cfg->savedir, sizeof cfg->savedir, tok);
+                else
+                    cfg_fail(&s, "expected a directory after", "savedir");
             } else if (strcmp(tok, "tokenfile") == 0) {
                 if (next_token(&s, tok, sizeof tok))
                     copy_str(cfg->tokenfile, sizeof cfg->tokenfile, tok);
@@ -575,6 +582,9 @@ static widget_kind kind_for_domain(const char *domain)
 
     if (strcmp(domain, "camera") == 0)
         return W_CAMERA;
+
+    if (strcmp(domain, "media_player") == 0)
+        return W_MEDIA;
 
     if (strcmp(domain, "scene")        == 0 ||
         strcmp(domain, "script")       == 0 ||
@@ -796,6 +806,8 @@ int cfg_write(const a2h_config *cfg, a2h_buf *out)
         buf_printf(out, "tlsverify  no\n");
     if (cfg->tokenfile[0])
         buf_printf(out, "tokenfile  %s\n", cfg->tokenfile);
+    if (cfg->savedir[0])
+        buf_printf(out, "savedir    %s\n", cfg->savedir);
     /* Preserved only if it was already in the file; TOKENFILE is preferred. */
     if (cfg->token[0])
         buf_printf(out, "token      %s\n", cfg->token);
@@ -863,4 +875,65 @@ int cfg_write(const a2h_config *cfg, a2h_buf *out)
     }
 
     return !out->failed;
+}
+
+/*
+ * A label becomes a file name.
+ *
+ * The rule is deliberately conservative: only characters known to be safe
+ * survive as themselves. Everything else becomes '_', runs of which collapse
+ * so that "PV Dach / Ost" does not save as "PV_Dach___Ost". Latin-1 accents
+ * (0xA0 and up) are kept -- the Amiga's filesystem stores bytes and its
+ * fonts render them, so "Küche" is a perfectly good file name there.
+ *
+ * '.' is dropped rather than kept: a label ending in one would produce
+ * "Name.-20260828-102900.jpg", and a leading one would hide the file.
+ */
+size_t cfg_label_filename(char *out, size_t outsz,
+                          const char *label, const char *entity)
+{
+    const char *src;
+    size_t      n = 0;
+    int         pending_us = 0;
+
+    if (!out || outsz == 0)
+        return 0;
+
+    src = (label && label[0]) ? label : NULL;
+    if (!src) {
+        /* No label: fall back to the entity's local part, as before. */
+        const char *dot = entity ? strchr(entity, '.') : NULL;
+        src = dot ? dot + 1 : (entity ? entity : "");
+    }
+
+    for (; *src && n + 1 < outsz; src++) {
+        unsigned char c = (unsigned char)*src;
+        int keep = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                   (c >= '0' && c <= '9') || c == '-' || c == '_' || c >= 0xA0;
+
+        if (!keep) {
+            /* Note the gap, but only emit it once something follows it. */
+            if (n > 0)
+                pending_us = 1;
+            continue;
+        }
+        if (pending_us) {
+            out[n++] = '_';
+            pending_us = 0;
+            if (n + 1 >= outsz)
+                break;
+        }
+        out[n++] = (char)c;
+    }
+
+    /*
+     * A label of nothing but punctuation would leave an empty stem, and a
+     * file called "-20260828-102900.jpg" tells the user nothing. Fall back
+     * to the entity rather than save something anonymous.
+     */
+    if (n == 0 && label && label[0])
+        return cfg_label_filename(out, outsz, NULL, entity);
+
+    out[n] = '\0';
+    return n;
 }

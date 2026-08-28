@@ -216,6 +216,50 @@ static long elapsed_ms(long start)
     return d;
 }
 
+/*
+ * A GUI start that never connected has nowhere to put its message: started
+ * from Workbench there is no console at all, so exiting quietly looks exactly
+ * like the program having failed to run. Say it on screen instead, then let
+ * the caller exit.
+ */
+static int gui_start_failed(struct app *a, const char *why)
+{
+    char text[320];
+
+    snprintf(text, sizeof text,
+             "ami2ha could not reach Home Assistant.\n\n"
+             "Server: %s:%d%s\n"
+             "%s\n\n"
+             "Check that the server is running, that the token is still\n"
+             "valid, and that this machine can reach it.",
+             a->ha.cfg.host, a->ha.cfg.port,
+             a->ha.cfg.tls ? " over TLS" : "", why);
+
+    return ui_ask("ami2ha", text, "Retry|Cancel") != 0;
+}
+
+/*
+ * Put the client back to where it was before the first attempt, so the retry
+ * is a genuine fresh start rather than a second opinion on a failed socket.
+ */
+static int gui_start_again(struct app *a)
+{
+    int rc;
+
+    net_disconnect(&a->sock);
+    ha_client_reset(&a->ha);
+    a->ready       = 0;
+    a->failed      = 0;
+    a->tls_retries = 0;
+
+    rc = net_connect(&a->sock, a->ha.cfg.host, a->ha.cfg.port, a->ha.cfg.tls);
+    if (rc < 0)
+        return 0;
+    if (rc == NET_OK)
+        ha_client_begin(&a->ha);
+    return 1;
+}
+
 /* Write whatever the client has queued, keeping what would not fit. */
 static int flush_output(struct app *a)
 {
@@ -770,22 +814,45 @@ int main(int argc, char **argv)
     if (args.gui) {
         char uierr[128];
 
-        /* Connect and load first. With a label the widget list does not
+        /*
+         * Connect and load first. With a label the widget list does not
          * exist until Home Assistant has answered, and even without one
-         * this avoids opening an empty window that fills in later. */
-        {
-            long started = clock_ms();
+         * this avoids opening an empty window that fills in later.
+         *
+         * A failure here used to end the program, which from a Workbench
+         * start looked like nothing having happened. Now it asks, because
+         * the common failure is transient -- Home Assistant Cloud drops
+         * handshakes -- and a relaunch to work around a blip is a poor
+         * answer when the program is already running and knows how to
+         * try again.
+         */
+        for (;;) {
+            long        started = clock_ms();
+            int         broke   = 0;
+            const char *why;
+
             while (!app.ready && !app.failed &&
                    elapsed_ms(started) < deadline_ms) {
-                if (!pump(&app, 250))
-                    goto cleanup;
+                if (!pump(&app, 250)) {
+                    broke = 1;
+                    break;
+                }
             }
-        }
-        if (app.failed) { rc_exit = RETURN_FAIL; goto cleanup; }
-        if (!app.ready) {
-            printf("ami2ha: timed out waiting for Home Assistant\n");
-            rc_exit = RETURN_FAIL;
-            goto cleanup;
+            if (app.ready)
+                break;
+
+            if (broke || app.failed)
+                why = app.ha.error[0] ? app.ha.error
+                                      : "The connection could not be made.";
+            else {
+                printf("ami2ha: timed out waiting for Home Assistant\n");
+                why = "Home Assistant did not answer in time.";
+            }
+
+            if (!gui_start_failed(&app, why) || !gui_start_again(&app)) {
+                rc_exit = RETURN_FAIL;
+                goto cleanup;
+            }
         }
 
         /*

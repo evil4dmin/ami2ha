@@ -24,6 +24,19 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
 
 void ui_dispose(a2h_ui *ui);
 
+/*
+ * A modal "something went wrong" box, usable before the application exists
+ * and therefore before there is anywhere else to put the message.
+ */
+void ui_alert(const char *title, const char *text);
+
+/*
+ * The same box with a choice of buttons, e.g. "Retry|Cancel". Returns the
+ * button number counting from 1 on the left, or 0 for the rightmost one --
+ * which is also what closing the window gives.
+ */
+int ui_ask(const char *title, const char *text, const char *gadgets);
+
 /* Serve this ARexx port from the GUI event loop. Borrowed, not owned. */
 void ui_set_rexx(a2h_ui *ui, a2h_rexx *rexx);
 

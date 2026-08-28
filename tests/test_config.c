@@ -200,6 +200,54 @@ static void test_camera_discovered_from_label(void)
     cfg_free(&cfg);
 }
 
+static void test_media_widget(void)
+{
+    a2h_config cfg, back;
+    char       err[CFG_ERR_MAX];
+    a2h_buf    out;
+
+    CHECK(parse(&cfg,
+        "group \"Musik\"\n"
+        "    media media_player.squeezer label \"Squeezer\"\n"
+        "    media media_player.kueche\n"
+        "end\n", err, sizeof err));
+
+    CHECK_INT(cfg.nwidgets, 2);
+    CHECK_INT(cfg.widgets[0].kind, W_MEDIA);
+    CHECK_STR(cfg.widgets[0].entity, "media_player.squeezer");
+    CHECK_STR(cfg.widgets[0].label, "Squeezer");
+    /* No label given: derived from the id, as for every other kind. */
+    CHECK_STR(cfg.widgets[1].label, "Kueche");
+
+    /* And it survives being written back out, which is what the settings
+     * window does to the whole file on every save. */
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(parse(&back, (const char *)out.data, err, sizeof err));
+    CHECK_INT(back.nwidgets, 2);
+    CHECK_INT(back.widgets[0].kind, W_MEDIA);
+    CHECK_STR(back.widgets[0].entity, "media_player.squeezer");
+    CHECK_STR(back.widgets[0].label, "Squeezer");
+    buf_free(&out);
+
+    cfg_free(&cfg);
+    cfg_free(&back);
+}
+
+static void test_media_discovered_from_label(void)
+{
+    a2h_config cfg;
+
+    /* A labelled media_player becomes a media widget, the same way a camera
+     * becomes a tile -- no separate selection mechanism. */
+    cfg_init(&cfg);
+    CHECK(cfg_add_discovered(&cfg, "media_player.squeezer", "amiga"));
+    CHECK(cfg_add_discovered(&cfg, "sensor.temperatur", "amiga"));
+    CHECK_INT(cfg.widgets[0].kind, W_MEDIA);
+    CHECK_INT(cfg.widgets[1].kind, W_SENSOR);
+    cfg_free(&cfg);
+}
+
 static void test_hand_written_labels_are_marked(void)
 {
     a2h_config cfg;
@@ -338,6 +386,72 @@ static void test_label_defaults_from_entity(void)
     CHECK_STR(cfg.widgets[0].label, "Kitchen power usage");
     CHECK_STR(cfg.widgets[1].label, "Good night");
     cfg_free(&cfg);
+}
+
+static void test_snapshot_name_uses_the_label(void)
+{
+    /* The drawer should read the way the tile does. */
+    char name[CFG_LABEL_MAX];
+
+    cfg_label_filename(name, sizeof name, "Einfahrt", "camera.driveway_fluent");
+    CHECK_STR(name, "Einfahrt");
+}
+
+static void test_snapshot_name_falls_back_to_the_entity(void)
+{
+    /* No label, or a label with nothing usable in it: a file still needs a
+     * name, and the entity's local part is the one we used to use. */
+    char name[CFG_LABEL_MAX];
+
+    cfg_label_filename(name, sizeof name, "", "camera.driveway_fluent");
+    CHECK_STR(name, "driveway_fluent");
+
+    cfg_label_filename(name, sizeof name, "///", "camera.driveway_fluent");
+    CHECK_STR(name, "driveway_fluent");
+
+    cfg_label_filename(name, sizeof name, "", "driveway");
+    CHECK_STR(name, "driveway");
+}
+
+static void test_snapshot_name_is_safe_on_a_filesystem(void)
+{
+    /* AmigaDOS reads ':' and '/' as path syntax and '#?' as a pattern, so a
+     * label containing them must not reach Open() intact. */
+    char name[CFG_LABEL_MAX];
+
+    cfg_label_filename(name, sizeof name, "PV Dach / Ost", "sensor.pv");
+    CHECK_STR(name, "PV_Dach_Ost");
+
+    cfg_label_filename(name, sizeof name, "Work:Cam*?", "camera.x");
+    CHECK_STR(name, "Work_Cam");
+
+    /* Leading and trailing punctuation leaves no stray separator. */
+    cfg_label_filename(name, sizeof name, "  Garten  ", "camera.x");
+    CHECK_STR(name, "Garten");
+}
+
+static void test_snapshot_name_keeps_umlauts(void)
+{
+    /* Latin-1 is what the Amiga's filesystem stores and its fonts draw. */
+    char name[CFG_LABEL_MAX];
+
+    cfg_label_filename(name, sizeof name, "K\xfc" "che", "camera.kitchen");
+    CHECK_STR(name, "K\xfc" "che");
+}
+
+static void test_snapshot_name_is_bounded(void)
+{
+    /* Never writes past the buffer, and never ends on a separator. */
+    char name[8];
+    size_t n;
+
+    n = cfg_label_filename(name, sizeof name, "Einfahrt Nord", "camera.x");
+    CHECK(n < sizeof name);
+    CHECK_STR(name, "Einfahr");
+
+    n = cfg_label_filename(name, 1, "Einfahrt", "camera.x");
+    CHECK(n == 0);
+    CHECK_STR(name, "");
 }
 
 static void test_button_with_json_data(void)
@@ -763,8 +877,15 @@ void suite_config(void)
     RUN(test_discovered_labels_are_not_explicit);
     RUN(test_camera_timestamp_is_optional);
     RUN(test_camera_timestamp_survives_a_write);
+    RUN(test_media_widget);
+    RUN(test_media_discovered_from_label);
     RUN(test_groups_and_widgets);
     RUN(test_label_defaults_from_entity);
+    RUN(test_snapshot_name_uses_the_label);
+    RUN(test_snapshot_name_falls_back_to_the_entity);
+    RUN(test_snapshot_name_is_safe_on_a_filesystem);
+    RUN(test_snapshot_name_keeps_umlauts);
+    RUN(test_snapshot_name_is_bounded);
     RUN(test_button_with_json_data);
     RUN(test_line_continuation);
     RUN(test_comments_and_blank_lines);

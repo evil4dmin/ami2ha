@@ -115,7 +115,7 @@ MakeStaticHook(DestructHook, DestructFunc);
 
 /* Order must match widget_kind: the cycle's active index is the kind. */
 static const char *kind_labels[] = {
-    "reading", "toggle", "button", "gauge", "text", "camera", NULL
+    "reading", "toggle", "button", "gauge", "text", "camera", "media", NULL
 };
 
 /* Dashboard columns, as offered in the cycle. Index + 1 is the value. */

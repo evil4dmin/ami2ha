@@ -15,6 +15,7 @@
  *   tls        no          # yes for https; needs AmiSSL
  *   tlsverify  yes         # no only for a self-signed certificate
  *   tokenfile  S:ha.token
+ *   savedir    Work:ami2ha-shots
  *   columns    2
  *
  *   group "Wohnzimmer"
@@ -63,7 +64,8 @@ typedef enum {
     W_BUTTON,     /* fires a service call                  */
     W_GAUGE,      /* value drawn as a bar between min/max  */
     W_TEXT,       /* static caption, no entity             */
-    W_CAMERA      /* snapshot from a camera entity          */
+    W_CAMERA,     /* snapshot from a camera entity          */
+    W_MEDIA       /* media player: what is playing, + transport */
 } widget_kind;
 
 typedef struct {
@@ -134,6 +136,13 @@ typedef struct {
      */
     int  tls_verify;
     char tokenfile[CFG_PATH_MAX];
+    /*
+     * Where "Save snapshot" on a camera tile puts its picture. Empty means
+     * the default, PROGDIR:snapshots -- resolved where it is used rather than
+     * filled in here, so a configuration written back out stays as short as
+     * the one that was read.
+     */
+    char savedir[CFG_PATH_MAX];
     char token[CFG_TOKEN_MAX];
     /*
      * When set, the entities come from Home Assistant: everything tagged
@@ -207,5 +216,23 @@ const char *cfg_widget_kind_name(widget_kind k);
  * generated file explains how to convert a sensor into one instead.
  */
 int cfg_generate(a2h_buf *out, const ha_store *store, const a2h_config *base);
+
+/*
+ * Build the leading part of a saved snapshot's file name from a widget's
+ * label, so a picture is called "Einfahrt-..." rather than
+ * "driveway_f-...". The label is what the user reads on screen, so it is
+ * what they will look for in the drawer.
+ *
+ * `label` may be empty or unusable, in which case `entity`'s local part is
+ * used instead -- a file must still get a name. Anything a filesystem or a
+ * shell would trip over becomes '_': path separators, wildcards, quotes and
+ * control characters. Latin-1 accents are kept, since that is what the
+ * Amiga's filesystem and its fonts both use.
+ *
+ * Writes at most `outsz` bytes including the NUL, and never a leading or
+ * trailing '_'. Returns the length written.
+ */
+size_t cfg_label_filename(char *out, size_t outsz,
+                          const char *label, const char *entity);
 
 #endif /* AMI2HA_CONFIG_H */

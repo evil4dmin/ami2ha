@@ -18,6 +18,8 @@
 #include <proto/intuition.h>
 #include <proto/dos.h>
 #include <dos/datetime.h>
+#include <proto/utility.h>
+#include <utility/date.h>
 
 #include "ami2ha/json.h"
 #include "ami2ha/ui.h"
@@ -36,6 +38,9 @@
  */
 struct Library      *MUIMasterBase = NULL;
 struct IntuitionBase *IntuitionBase = NULL;
+/* Amiga2Date lives here, and it is the only locale-proof way to turn the
+ * clock into numbers for a file name. */
+struct Library      *UtilityBase   = NULL;
 
 /* Neither MAKE_ID nor xget() is supplied by this SDK. */
 #define A2H_MAKE_ID(a,b,c,d) \
@@ -54,11 +59,55 @@ static int ui_libs_open(void)
         IntuitionBase = (struct IntuitionBase *)OpenLibrary("intuition.library", 37);
     if (!MUIMasterBase)
         MUIMasterBase = OpenLibrary(MUIMASTER_NAME, MUIMASTER_VMIN);
-    return IntuitionBase && MUIMasterBase;
+    if (!UtilityBase)
+        UtilityBase = OpenLibrary("utility.library", 37);
+    return IntuitionBase && MUIMasterBase && UtilityBase;
+}
+
+/*
+ * Say something on screen when there is no console to say it on. A GUI start
+ * that cannot reach Home Assistant used to end with a printf and no window,
+ * which from a Workbench double-click is indistinguishable from the program
+ * not having run at all.
+ *
+ * EasyRequest rather than MUI_Request: this has to work before any MUI
+ * application object exists, which is exactly when the first connection is
+ * made.
+ */
+int ui_ask(const char *title, const char *text, const char *gadgets)
+{
+    struct EasyStruct es;
+
+    if (!IntuitionBase)
+        IntuitionBase = (struct IntuitionBase *)OpenLibrary("intuition.library", 37);
+    if (!IntuitionBase)
+        return 0;
+
+    es.es_StructSize   = sizeof es;
+    es.es_Flags        = 0;
+    es.es_Title        = (UBYTE *)title;
+    es.es_TextFormat   = (UBYTE *)"%s";
+    es.es_GadgetFormat = (UBYTE *)gadgets;
+
+    /*
+     * EasyRequest numbers the buttons left to right from 1 and gives the
+     * rightmost one 0, so "Retry|Cancel" answers 1 for retry and 0 for
+     * cancel -- which is also what a closed window means.
+     */
+    return (int)EasyRequestArgs(NULL, &es, NULL, (APTR)&text);
+}
+
+void ui_alert(const char *title, const char *text)
+{
+    ui_ask(title, text, "Ok");
 }
 
 static void ui_libs_close(void)
 {
+    if (UtilityBase) {
+        CloseLibrary(UtilityBase);
+        UtilityBase = NULL;
+    }
     if (MUIMasterBase) {
         CloseLibrary(MUIMasterBase);
         MUIMasterBase = NULL;
@@ -74,6 +123,26 @@ static void ui_libs_close(void)
 #define ID_RECONNECT   2
 #define ID_ABOUT       3
 #define ID_WIDGET_BASE 1000
+/*
+ * A media widget has a row of transport buttons rather than one control, so
+ * it needs several return IDs per widget: MEDIA_BASE + widget * MEDIA_STRIDE
+ * + action. Above the widget range, and tested before it.
+ */
+/* One per camera widget: the Save item on its context menu. */
+#define ID_CAMSAVE_BASE 50000
+
+#define ID_MEDIA_BASE  100000
+#define ID_MEDIA_STRIDE 8
+
+/* The transport, in the order the buttons appear. */
+enum {
+    MEDIA_PREV = 0,
+    MEDIA_PLAY,
+    MEDIA_NEXT,
+    MEDIA_VOL_DOWN,
+    MEDIA_VOL_UP,
+    MEDIA_ACTIONS
+};
 
 /*
  * Reconnection. The initial connection is made before the window opens,
@@ -92,6 +161,21 @@ typedef enum {
  * server that accepts the connection and then never speaks. */
 #define ATTEMPT_TICKS    (30 * 50)
 
+/*
+ * Keepalive, in ticks. A TCP connection can die without either end being
+ * told -- a WiFi re-association is enough -- and the socket then stays open
+ * and silent forever. Reading it never reports closed or failed, so nothing
+ * else in here notices: the dashboard goes on showing hours-old readings
+ * under a status line claiming to be connected.
+ *
+ * So ask. After IDLE_PING_TICKS of silence send a keepalive, and if the
+ * answer has not arrived by IDLE_DEAD_TICKS treat the link as gone. Home
+ * Assistant sends its own pings well inside the dead window, so on a healthy
+ * but quiet connection neither timer is ever reached.
+ */
+#define IDLE_PING_TICKS  (30 * 50)
+#define IDLE_DEAD_TICKS  (90 * 50)
+
 typedef struct {
     Object *value;   /* Text or Gauge showing the state; NULL for buttons */
     Object *control; /* Checkmark or Button; NULL for read-only widgets   */
@@ -102,7 +186,30 @@ typedef struct {
     campic  pic;
     Object *stamp;      /* caption under a camera tile, or NULL */
     char    stamp_text[24];
+
+    /* Media only. The transport buttons, and room for a line that has to
+     * hold an artist, a title and a station name at once. */
+    Object *media_btn[MEDIA_ACTIONS];
+    char    media_text[96];
+    /*
+     * Station and volume go on their own smaller line. On one line with the
+     * title they overflow the cell and MUI clips it mid-word -- "Shaboozey -
+     * A Bar Song (Tipsy" is what that looks like, and it reads as a bug.
+     */
+    char    media_extra[64];
+    /* The volume reads out beside the buttons that change it, not on the
+     * line above: that line is already full of station names, and this is
+     * the number someone is looking for while pressing Vol +. */
+    Object *media_vol;
+    char    media_vol_text[8];
     long    cam_next;   /* ui_now() tick of the next automatic refresh */
+    /*
+     * Camera context menu. MUI does not own a menustrip handed to it through
+     * MUIA_ContextMenu the way it owns the object tree, so both are kept and
+     * disposed here.
+     */
+    Object *cam_menu;
+    Object *cam_save;
     int     cam_slot;   /* which of the two files the picture on screen holds */
     int     cam_want;   /* the file the fetch in flight is writing to        */
 } ui_widget;
@@ -120,6 +227,8 @@ struct a2h_ui {
     long        retry_at;        /* when to make the next attempt      */
     long        attempt_at;      /* when the running attempt started   */
     int         retry_secs;      /* current backoff                    */
+    long        last_rx;         /* when the server was last heard     */
+    long        last_ping;       /* when a keepalive was last sent     */
 
     a2h_config *cfg;
     ha_client  *ha;
@@ -147,6 +256,15 @@ struct a2h_ui {
 /* ------------------------------------------------------------------ *
  * Value formatting
  * ------------------------------------------------------------------ */
+
+/* Append what fits and stop, so a long station name cannot run off the end. */
+static void append_bounded(char *dst, size_t dstsz, const char *src)
+{
+    size_t have = strlen(dst);
+    size_t room = (have + 1 < dstsz) ? dstsz - have - 1 : 0;
+
+    strncat(dst, src, room);
+}
 
 /* "21.4" + "°C" -> "21.4 °C". Home Assistant's own unknown states are
  * shown as a dash, which reads better than the literal "unavailable". */
@@ -319,6 +437,27 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             return 0;
         DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
 
+        /*
+         * Right-click is the menu button on this machine, and MUI turns it
+         * into a context menu for whichever object is under the pointer --
+         * so the obvious gesture on a picture is available without spending
+         * dashboard space on a button. Left-click stays the refresh.
+         */
+        uw->cam_save = MUI_NewObject(MUIC_Menuitem,
+            MUIA_Menuitem_Title, (IPTR)"Save snapshot",
+            MUIA_UserData,       (IPTR)(ID_CAMSAVE_BASE + index),
+            TAG_DONE);
+        uw->cam_menu = MUI_NewObject(MUIC_Menustrip,
+            MUIA_Family_Child, (IPTR)MUI_NewObject(MUIC_Menu,
+                MUIA_Menu_Title, (IPTR)w->label,
+                MUIA_Family_Child, (IPTR)uw->cam_save,
+                TAG_DONE),
+            TAG_DONE);
+        if (uw->cam_menu && uw->cam_save)
+            set(uw->control, MUIA_ContextMenu, (IPTR)uw->cam_menu);
+        else
+            uw->cam_menu = uw->cam_save = NULL;
+
         if (w->cam_stamp) {
             /* The picture and its caption share the cell, so the grid is
              * still two columns and the camera row still lines up with the
@@ -345,6 +484,83 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             DoMethod(parent, OM_ADDMEMBER, (IPTR)uw->control);
         }
         return 1;
+
+    case W_MEDIA: {
+        /*
+         * Two rows in one cell: what is playing, and the transport under it.
+         * The buttons are Text objects with a button frame, exactly as
+         * W_BUTTON does it -- MUIC_Button is not in MUI 3.8's public class
+         * list, and the framed Text is what the rest of this file already
+         * trusts.
+         *
+         * A Rectangle after the buttons soaks up the spare width, or MUI
+         * stretches five buttons across the whole dashboard.
+         */
+        static const char *const face[MEDIA_ACTIONS] = {
+            "<<", ">/||", ">>", "Vol -", "Vol +"
+        };
+        Object *row, *cell;
+        int     b;
+
+        strcpy(uw->media_text, "-");
+        uw->value = MUI_NewObject(MUIC_Text,
+            MUIA_Text_Contents, (IPTR)uw->media_text,
+            MUIA_Text_PreParse, (IPTR)"\33l",
+            MUIA_Frame,         MUIV_Frame_Text,
+            TAG_DONE);
+
+        row = MUI_NewObject(MUIC_Group,
+            MUIA_Group_Horiz,   TRUE,
+            MUIA_Group_Spacing, 2,
+            TAG_DONE);
+        if (!uw->value || !row)
+            return 0;
+
+        for (b = 0; b < MEDIA_ACTIONS; b++) {
+            uw->media_btn[b] = MUI_NewObject(MUIC_Text,
+                MUIA_Text_Contents, (IPTR)face[b],
+                MUIA_Text_PreParse, (IPTR)"\33c",
+                MUIA_Frame,         MUIV_Frame_Button,
+                MUIA_Background,    MUII_ButtonBack,
+                MUIA_InputMode,     MUIV_InputMode_RelVerify,
+                MUIA_FixWidthTxt,   (IPTR)"Vol -",
+                TAG_DONE);
+            if (!uw->media_btn[b])
+                return 0;
+            DoMethod(row, OM_ADDMEMBER, (IPTR)uw->media_btn[b]);
+        }
+        strcpy(uw->media_vol_text, "-");
+        uw->media_vol = MUI_NewObject(MUIC_Text,
+            MUIA_Text_Contents, (IPTR)uw->media_vol_text,
+            MUIA_Text_PreParse, (IPTR)"\33r",
+            MUIA_FixWidthTxt,   (IPTR)"100%",
+            MUIA_Frame,         MUIV_Frame_Text,
+            TAG_DONE);
+        if (!uw->media_vol)
+            return 0;
+        DoMethod(row, OM_ADDMEMBER, (IPTR)uw->media_vol);
+        DoMethod(row, OM_ADDMEMBER, (IPTR)MUI_NewObject(MUIC_Rectangle, TAG_DONE));
+
+        strcpy(uw->media_extra, "");
+        uw->stamp = MUI_NewObject(MUIC_Text,
+            MUIA_Text_Contents, (IPTR)uw->media_extra,
+            MUIA_Text_PreParse, (IPTR)"\33l",
+            MUIA_Font,          (IPTR)MUIV_Font_Tiny,
+            MUIA_Frame,         MUIV_Frame_Text,
+            TAG_DONE);
+
+        cell = MUI_NewObject(MUIC_Group,
+            MUIA_Group_Child, (IPTR)uw->value,
+            MUIA_Group_Child, (IPTR)uw->stamp,
+            MUIA_Group_Child, (IPTR)row,
+            TAG_DONE);
+        if (!cell || !uw->stamp)
+            return 0;
+
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)cell);
+        return 1;
+    }
 
     case W_BUTTON:
         uw->control = MUI_NewObject(MUIC_Text,
@@ -378,6 +594,22 @@ static void bind_controls(a2h_ui *ui)
     for (i = 0; i < ui->nwidgets; i++) {
         const a2h_widget *w = &ui->cfg->widgets[i];
 
+        /*
+         * A media widget has a row of buttons rather than one control, so it
+         * is bound before the guard below -- which exists for the kinds that
+         * have no control at all, and would otherwise skip this one too.
+         */
+        if (w->kind == W_MEDIA) {
+            int b;
+            for (b = 0; b < MEDIA_ACTIONS; b++)
+                if (ui->widgets[i].media_btn[b])
+                    DoMethod(ui->widgets[i].media_btn[b], MUIM_Notify,
+                             MUIA_Pressed, FALSE, (IPTR)ui->app, 2,
+                             MUIM_Application_ReturnID,
+                             ID_MEDIA_BASE + i * ID_MEDIA_STRIDE + b);
+            continue;
+        }
+
         if (!ui->widgets[i].control)
             continue;
 
@@ -385,10 +617,25 @@ static void bind_controls(a2h_ui *ui)
             DoMethod(ui->widgets[i].control, MUIM_Notify, MUIA_Selected,
                      MUIV_EveryTime, (IPTR)ui->app, 2,
                      MUIM_Application_ReturnID, ID_WIDGET_BASE + i);
-        else if (w->kind == W_BUTTON || w->kind == W_CAMERA)
+        else if (w->kind == W_BUTTON || w->kind == W_CAMERA) {
             DoMethod(ui->widgets[i].control, MUIM_Notify, MUIA_Pressed, FALSE,
                      (IPTR)ui->app, 2,
                      MUIM_Application_ReturnID, ID_WIDGET_BASE + i);
+            /*
+             * A context menu choice arrives as MUIA_ContextMenuTrigger on the
+             * object the menu belongs to, holding the item that was picked --
+             * which is why that attribute exists, and it means no subclass is
+             * needed. Watching for the exact item keeps this working when
+             * there is more than one.
+             */
+            if (ui->widgets[i].cam_save)
+                DoMethod(ui->widgets[i].control, MUIM_Notify,
+                         MUIA_ContextMenuTrigger,
+                         (IPTR)ui->widgets[i].cam_save,
+                         (IPTR)ui->app, 2,
+                         MUIM_Application_ReturnID, ID_CAMSAVE_BASE + i);
+        }
+
     }
 }
 
@@ -455,6 +702,24 @@ static void free_pictures(a2h_ui *ui)
         campic_free(&ui->widgets[i].pic);
 }
 
+/*
+ * A menustrip handed over through MUIA_ContextMenu is not part of the
+ * application's object tree, so nothing else ever frees it -- not
+ * MUI_DisposeObject(app), and not the group rebuild that throws away the
+ * tile it was attached to.
+ */
+static void free_context_menus(a2h_ui *ui)
+{
+    int i;
+
+    for (i = 0; i < ui->nwidgets; i++) {
+        if (ui->widgets[i].cam_menu)
+            MUI_DisposeObject(ui->widgets[i].cam_menu);
+        ui->widgets[i].cam_menu = NULL;
+        ui->widgets[i].cam_save = NULL;
+    }
+}
+
 static int build_dashboard(a2h_ui *ui)
 {
     /* The widget table is indexed by configuration order, so it has to
@@ -467,6 +732,7 @@ static int build_dashboard(a2h_ui *ui)
 
     /* The old objects are gone by now, so nothing is drawing from these. */
     free_pictures(ui);
+    free_context_menus(ui);
     free(ui->widgets);
     ui->widgets  = fresh;
     ui->nwidgets = ui->cfg->nwidgets;
@@ -602,6 +868,11 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
                     MUIA_UserData, (IPTR)ID_ED_OPEN,
                     TAG_DONE),
                 MUIA_Family_Child, (IPTR)MUI_NewObject(MUIC_Menuitem,
+                    MUIA_Menuitem_Title, (IPTR)"Reconnect",
+                    MUIA_Menuitem_Shortcut, (IPTR)"R",
+                    MUIA_UserData, (IPTR)ID_RECONNECT,
+                    TAG_DONE),
+                MUIA_Family_Child, (IPTR)MUI_NewObject(MUIC_Menuitem,
                     MUIA_Menuitem_Title, (IPTR)"About...",
                     MUIA_Menuitem_Shortcut, (IPTR)"A",
                     MUIA_UserData, (IPTR)ID_ABOUT,
@@ -690,6 +961,8 @@ void ui_dispose(a2h_ui *ui)
         set(ui->win, MUIA_Window_Open, FALSE);
         MUI_DisposeObject(ui->app);
     }
+    free_context_menus(ui);
+
     /* After the objects, so nothing is drawing from these bitmaps. */
     free_pictures(ui);
     free(ui->widgets);
@@ -763,6 +1036,100 @@ static long status_tick(a2h_ui *ui)
     return left * 20;
 }
 
+/*
+ * One line describing what a media player is doing. Home Assistant sends the
+ * pieces separately and any of them can be missing -- a radio stream often
+ * has a title and no artist, and a stopped player has neither -- so this
+ * builds up whatever is there rather than assuming a shape.
+ *
+ * Volume rides along at the end because it is the one thing the buttons
+ * change that has no other display: without it, pressing Vol + twice tells
+ * you nothing.
+ */
+/*
+ * Only a player with something loaded has a track to name. Home Assistant
+ * does withdraw the title when a player is switched off, but relying on that
+ * alone means trusting every integration to do it -- and a switched-off
+ * player still advertising the last song is exactly the wrong answer.
+ */
+static int media_has_track(const ha_entity *e)
+{
+    return e && (strcmp(e->state, "playing")   == 0 ||
+                 strcmp(e->state, "paused")    == 0 ||
+                 strcmp(e->state, "buffering") == 0);
+}
+
+static void media_describe(char *dst, size_t dstsz, const ha_entity *e)
+{
+    const char *title = media_has_track(e) ? ha_entity_attr(e, "media_title")
+                                           : NULL;
+    const char *state = (e && e->state[0]) ? e->state : "-";
+
+    dst[0] = '\0';
+
+    /*
+     * The title alone on the wide line. Artist and station go underneath,
+     * because a cell beside a 320-pixel camera tile is about 29 characters
+     * and "Coldplay - Hymn for the Weekend" is 31 -- putting them together
+     * clipped ordinary radio tracks mid-word.
+     */
+    if (title && *title)
+        append_bounded(dst, dstsz, title);
+    else
+        append_bounded(dst, dstsz, state);   /* nothing playing: that is the news */
+}
+
+/*
+ * Artist, station and volume, in the small font under the title. Whichever
+ * of them Home Assistant is sending -- a stream often has no artist, a file
+ * no station -- separated only where there is something on both sides.
+ */
+static void media_describe_extra(char *dst, size_t dstsz, const ha_entity *e)
+{
+    const char *artist = media_has_track(e) ? ha_entity_attr(e, "media_artist")
+                                            : NULL;
+    const char *chan   = media_has_track(e) ? ha_entity_attr(e, "media_channel")
+                                            : NULL;
+
+    dst[0] = '\0';
+
+    if (artist && *artist)
+        append_bounded(dst, dstsz, artist);
+
+    if (chan && *chan) {
+        if (dst[0])
+            append_bounded(dst, dstsz, " | ");
+        append_bounded(dst, dstsz, chan);
+    }
+}
+
+/*
+ * "0.71" -> "71%", without floating point: shift the decimal point and round
+ * on the digit after the ones we keep. vbcc's %f would drag in the whole
+ * floating point library for this.
+ */
+static void media_volume(char *dst, size_t dstsz, const ha_entity *e)
+{
+    const char *vol = e ? ha_entity_attr(e, "volume_level") : NULL;
+    const char *p;
+    int         pct;
+
+    strncpy(dst, "-", dstsz - 1);
+    dst[dstsz - 1] = '\0';
+    if (!vol || !*vol)
+        return;
+
+    p   = strchr(vol, '.');
+    pct = (int)strtol(vol, NULL, 10) * 100;
+    if (p) {
+        int tenths = (p[1] >= '0' && p[1] <= '9') ? p[1] - '0' : 0;
+        int hund   = (p[2] >= '0' && p[2] <= '9') ? p[2] - '0' : 0;
+        pct += tenths * 10 + hund + (p[3] >= '5' && p[3] <= '9' ? 1 : 0);
+    }
+    if (pct >= 0 && pct <= 100 && dstsz > 5)
+        sprintf(dst, "%d%%", pct);
+}
+
 static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
 {
     const a2h_widget *w  = &ui->cfg->widgets[i];
@@ -797,8 +1164,21 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
         }
         break;
 
+    case W_MEDIA:
+        media_describe(uw->media_text, sizeof uw->media_text, e);
+        if (uw->value)
+            set(uw->value, MUIA_Text_Contents, (IPTR)uw->media_text);
+        media_describe_extra(uw->media_extra, sizeof uw->media_extra, e);
+        if (uw->stamp)
+            set(uw->stamp, MUIA_Text_Contents, (IPTR)uw->media_extra);
+        media_volume(uw->media_vol_text, sizeof uw->media_vol_text, e);
+        if (uw->media_vol)
+            set(uw->media_vol, MUIA_Text_Contents, (IPTR)uw->media_vol_text);
+        break;
+
     case W_BUTTON:
     case W_TEXT:
+    case W_CAMERA:
         break;
     }
 }
@@ -892,6 +1272,142 @@ static void stamp_now(a2h_ui *ui, int i)
     }
 
     set(uw->stamp, MUIA_Text_Contents, (IPTR)uw->stamp_text);
+}
+
+/*
+ * Keep the picture that is on screen. The snapshot is already a file -- the
+ * fetch wrote it and the datatype is still reading from it -- so this is a
+ * copy, not a re-encode, and it keeps whichever frame the user is looking at
+ * rather than fetching a newer one behind their back.
+ *
+ * Reading the displayed slot is safe: the datatype's lock stops it being
+ * written, not read.
+ */
+static void camera_save(a2h_ui *ui, int i)
+{
+    const a2h_widget *w;
+    ui_widget        *uw;
+    char  src[64], dest[CFG_PATH_MAX + 64], name[64], stem[CFG_LABEL_MAX];
+    struct DateStamp ds;
+    struct ClockData cd;
+    BPTR  in, out;
+    char *buf;
+    long  got;
+    /*
+     * Unconfigured, snapshots go in a drawer beside the program: it always
+     * exists, it survives a reboot, and it is where someone would look for
+     * pictures a program saved. Not RAM: -- T: is already RAM: on a normal
+     * system, so that would copy a file from RAM to RAM and still lose it at
+     * the next boot, which is not what "save" means.
+     */
+    const char *dir = ui->cfg->savedir[0] ? ui->cfg->savedir
+                                          : "PROGDIR:snapshots";
+
+    if (i < 0 || i >= ui->nwidgets)
+        return;
+    w  = &ui->cfg->widgets[i];
+    uw = &ui->widgets[i];
+
+    if (w->kind != W_CAMERA)
+        return;
+    if (!uw->pic.dt) {
+        ui_flash_status(ui, "No picture to save yet");
+        return;
+    }
+
+    /*
+     * The label, not the entity: the drawer should read "Einfahrt-..." the
+     * way the tile does, not "driveway_f-...". cfg_label_filename falls back
+     * to the entity when there is no usable label.
+     */
+    cfg_label_filename(stem, sizeof stem, w->label, w->entity);
+
+    /*
+     * Amiga2Date rather than DateToStr: a file name wants numbers, and
+     * DateToStr gives the month as a name whatever format is asked for once
+     * a locale is in play -- which turned the first saved files into
+     * "...-2625-223410.jpg", the month having been dropped by the filter that
+     * kept only digits. This is locale-proof and sorts properly.
+     */
+    DateStamp(&ds);
+    Amiga2Date((ULONG)ds.ds_Days * 86400UL + (ULONG)ds.ds_Minute * 60UL +
+               (ULONG)ds.ds_Tick / TICKS_PER_SECOND, &cd);
+
+    /*
+     * Thirty characters, no more: that is the limit on a classic Amiga
+     * filesystem, and it truncates silently -- the first file saved here
+     * became "driveway_fluent-20260825-22464", losing the extension and with
+     * it any hope of a script recognising it. The date and time are worth 16
+     * and the extension 4, so the label gets the remaining 10.
+     */
+    snprintf(name, sizeof name, "%.10s-%04d%02d%02d-%02d%02d%02d.jpg",
+             stem, (int)cd.year, (int)cd.month, (int)cd.mday,
+             (int)cd.hour, (int)cd.min, (int)cd.sec);
+
+    snprintf(dest, sizeof dest, "%s", dir);
+    if (!AddPart((STRPTR)dest, (STRPTR)name, sizeof dest)) {
+        ui_flash_status(ui, "The savedir path is too long");
+        return;
+    }
+
+    snapshot_path(src, sizeof src, i, uw->cam_slot);
+
+    in = Open((STRPTR)src, MODE_OLDFILE);
+    if (!in) {
+        ui_flash_status(ui, "The snapshot file has gone");
+        return;
+    }
+
+    out = Open((STRPTR)dest, MODE_NEWFILE);
+    if (!out) {
+        /*
+         * Most likely the directory does not exist yet. Make it once and try
+         * again -- a save should not fail on a folder.
+         *
+         * CreateDir hands back a *lock* on what it made, not a success flag.
+         * Treating it as a boolean leaves the directory locked for as long as
+         * the program runs, which shows up as "object is in use" from List and
+         * "directory not available, error 205" from Directory Opus -- a folder
+         * that plainly exists and cannot be opened.
+         */
+        BPTR made = CreateDir((STRPTR)dir);
+        if (made) {
+            UnLock(made);
+            out = Open((STRPTR)dest, MODE_NEWFILE);
+        }
+    }
+    if (!out) {
+        Close(in);
+        ui_flash_status(ui, "Could not write to savedir");
+        return;
+    }
+
+    buf = malloc(8192);
+    if (!buf) {
+        Close(in);
+        Close(out);
+        ui_flash_status(ui, "Out of memory");
+        return;
+    }
+
+    while ((got = Read(in, buf, 8192)) > 0)
+        if (Write(out, buf, got) != got) {
+            got = -1;
+            break;
+        }
+
+    free(buf);
+    Close(in);
+    Close(out);
+
+    if (got < 0) {
+        DeleteFile((STRPTR)dest);
+        ui_flash_status(ui, "The save did not finish");
+    } else {
+        char said[128];
+        snprintf(said, sizeof said, "Saved %s", name);
+        ui_flash_status(ui, said);
+    }
 }
 
 /* Ask for a new frame for widget `i`, unless a fetch is already running. */
@@ -1035,6 +1551,36 @@ static void camera_tick(a2h_ui *ui)
         request_snapshot(ui, i);
         return;   /* one at a time */
     }
+}
+
+/*
+ * Press one of a media widget's transport buttons. Every one of these is a
+ * service that takes no data, which is why the whole transport is five
+ * service names and no new plumbing. volume_set would need a value, and a
+ * slider with it -- these two step it instead.
+ */
+static void fire_media(a2h_ui *ui, int i, int action)
+{
+    static const char *const service[MEDIA_ACTIONS] = {
+        "media_previous_track", "media_play_pause", "media_next_track",
+        "volume_down", "volume_up"
+    };
+    static const char *const said[MEDIA_ACTIONS] = {
+        "Previous...", "Play/pause...", "Next...", "Volume down...",
+        "Volume up..."
+    };
+    const a2h_widget *w;
+
+    if (i < 0 || i >= ui->nwidgets || action < 0 || action >= MEDIA_ACTIONS)
+        return;
+
+    w = &ui->cfg->widgets[i];
+    if (w->kind != W_MEDIA || !w->entity[0])
+        return;
+
+    ha_client_call_service(ui->ha, "media_player", service[action],
+                           w->entity, NULL);
+    ui_flash_status(ui, said[action]);
 }
 
 static void fire_widget(a2h_ui *ui, int i)
@@ -1218,6 +1764,81 @@ static long link_tick(a2h_ui *ui)
     return left * 20;
 }
 
+/* The link was heard from. Restarts the silence window. */
+static void link_heard(a2h_ui *ui)
+{
+    ui->last_rx = ui_now();
+}
+
+/*
+ * Watch a connection that is up for going quiet. Returns how long until the
+ * next check is due in milliseconds, so the event loop can sleep exactly
+ * that long, or -1 when there is nothing to watch.
+ *
+ * The keepalive is queued rather than sent here: the event loop already
+ * notices anything waiting in the client's output buffer, asks select for
+ * writability and reports a failed send through the same path as any other.
+ */
+static long link_watch(a2h_ui *ui)
+{
+    long now, idle, left;
+
+    if (ui->link != LINK_UP || ui->ha->state != HA_ST_READY)
+        return -1;
+
+    now  = ui_now();
+    idle = now - ui->last_rx;
+
+    /* Midnight, or a clock someone has just set: begin the window again
+     * rather than declare a healthy link dead. */
+    if (idle < 0) {
+        ui->last_rx = ui->last_ping = now;
+        return IDLE_PING_TICKS * 20;
+    }
+
+    if (idle >= IDLE_DEAD_TICKS) {
+        connection_lost(ui, "No reply from server");
+        return 0;
+    }
+
+    /* One keepalive per silence, and only once nothing has been heard for
+     * a while. The answer counts as traffic, which resets everything. */
+    if (idle >= IDLE_PING_TICKS && ui->last_ping <= ui->last_rx) {
+        ui->last_ping = now;
+        ha_client_ping(ui->ha);
+    }
+
+    left = (ui->last_ping <= ui->last_rx ? IDLE_PING_TICKS
+                                         : IDLE_DEAD_TICKS) - idle;
+    if (left < 1)
+        left = 1;
+    return left * 20;
+}
+
+/*
+ * Reconnect because the user asked. Worth having for the case this program
+ * cannot detect on its own, and it saves waiting out a long backoff when a
+ * server is known to be back.
+ */
+static void ui_reconnect_now(a2h_ui *ui)
+{
+    /*
+     * A rejected token is read once at startup, so a retry would present
+     * the same one -- and Home Assistant bans an address that keeps trying.
+     * Say so instead.
+     */
+    if (ui->ha->auth_rejected) {
+        ui_set_status(ui, "Token rejected -- restart with a valid token");
+        return;
+    }
+
+    net_disconnect(ui->sock);
+    ha_client_reset(ui->ha);
+    ui->link       = LINK_RETRYING;
+    ui->retry_secs = RETRY_FIRST_SECS;
+    try_reconnect(ui);
+}
+
 /* ------------------------------------------------------------------ *
  * Event loop
  * ------------------------------------------------------------------ */
@@ -1285,10 +1906,13 @@ static void service_socket(a2h_ui *ui, int readable, int writable)
             connection_lost(ui, "Network error");
             return;
         }
-        if (got > 0 && !ha_client_feed(ui->ha, buf, (size_t)got)) {
-            connection_lost(ui, ui->ha->error[0] ? ui->ha->error
-                                                 : "Protocol error");
-            return;
+        if (got > 0) {
+            link_heard(ui);
+            if (!ha_client_feed(ui->ha, buf, (size_t)got)) {
+                connection_lost(ui, ui->ha->error[0] ? ui->ha->error
+                                                     : "Protocol error");
+                return;
+            }
         }
     }
 
@@ -1301,8 +1925,12 @@ int ui_run(a2h_ui *ui)
     ULONG sigs = 0;
     int   rc   = RETURN_OK;
 
+    /* The first connection is made before the window opens, so the silence
+     * window starts here rather than at a state change. */
+    ui->last_rx = ui->last_ping = ui_now();
+
     for (;;) {
-        long  status_ms, link_ms, wait_ms;
+        long  status_ms, link_ms, watch_ms, wait_ms;
         ULONG id;
 
         /*
@@ -1313,15 +1941,19 @@ int ui_run(a2h_ui *ui)
         if (ui->link == LINK_RETRYING && ui->ha->state == HA_ST_READY) {
             ui->link       = LINK_UP;
             ui->retry_secs = RETRY_FIRST_SECS;
+            ui->last_rx    = ui->last_ping = ui_now();
             ui_set_status_connected(ui);
             ui_refresh_all(ui);
         }
 
         status_ms = status_tick(ui);
         link_ms   = link_tick(ui);
+        watch_ms  = link_watch(ui);
         wait_ms   = status_ms;
         if (link_ms >= 0 && (wait_ms < 0 || link_ms < wait_ms))
             wait_ms = link_ms;
+        if (watch_ms >= 0 && (wait_ms < 0 || watch_ms < wait_ms))
+            wait_ms = watch_ms;
 
         id = DoMethod(ui->app, MUIM_Application_NewInput, (IPTR)&sigs);
 
@@ -1333,6 +1965,11 @@ int ui_run(a2h_ui *ui)
             continue;
         }
 
+        if (id == ID_RECONNECT) {
+            ui_reconnect_now(ui);
+            continue;
+        }
+
         {
             int relayout = 0;
             if (editor_handle(ui->editor, id, &relayout)) {
@@ -1340,6 +1977,20 @@ int ui_run(a2h_ui *ui)
                     ui_rebuild(ui);
                 continue;
             }
+        }
+
+        if (id >= ID_CAMSAVE_BASE && id < ID_MEDIA_BASE) {
+            camera_save(ui, (int)(id - ID_CAMSAVE_BASE));
+            continue;
+        }
+
+        if (id >= ID_MEDIA_BASE) {
+            ULONG rel = id - ID_MEDIA_BASE;
+            fire_media(ui, (int)(rel / ID_MEDIA_STRIDE),
+                           (int)(rel % ID_MEDIA_STRIDE));
+            if (!flush_output(ui))
+                connection_lost(ui, "Send failed");
+            continue;
         }
 
         if (id >= ID_WIDGET_BASE) {
