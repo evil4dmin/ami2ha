@@ -6,6 +6,17 @@ Control your smart home from a real Amiga: read sensors, watch entity states,
 flip switches and dimmers — from a fully configurable MUI dashboard, with an
 ARexx port so the rest of your Workbench can join in.
 
+<p align="center">
+  <img src="docs/images/dashboard.png" width="812"
+       alt="The ami2ha dashboard on AmigaOS: groups of sensors and gauges, two
+            camera tiles, a light toggle, a button and a media player row">
+</p>
+
+<p align="center">
+  <sub>Sensors, gauges, camera snapshots, a toggle, a button and a media
+  player — one MUI window on a real Amiga 4000T.</sub>
+</p>
+
 > **Status: early, but it works.** Everything below has been run on real
 > AmigaOS 3.2 hardware against a live Home Assistant: reading sensors,
 > flipping switches, the settings window, the ARexx port, Workbench
@@ -18,7 +29,7 @@ ARexx port so the rest of your Workbench can join in.
 Grab the release archive, unpack it, and double-click the `Install` icon:
 
 ```
-lha x ami2ha-0.2.lha
+lha x ami2ha-0.3.lha
 ```
 
 From a Shell the Installer has to be named in full, since it isn't on the
@@ -164,14 +175,35 @@ ami2ha homeassistant.local TOKENFILE=S:ha.token WRITECONFIG=S:ami2ha.cfg
 ami2ha CONFIG=S:ami2ha.cfg GUI
 ```
 
-Widget kinds are `sensor`, `toggle`, `gauge`, `button` and `text`. See
+Right-click a camera tile for **Save snapshot**, which keeps the frame that is
+on screen. Files are named after the tile's label and the time, so a camera
+labelled `Einfahrt` saves as `Einfahrt-20260828-102900.jpg`. Snapshots go to
+`PROGDIR:snapshots` unless the configuration says otherwise:
+
+```
+savedir    Work:ami2ha-shots
+```
+
+Widget kinds are `sensor`, `toggle`, `gauge`, `button`, `text`, `camera` and
+`media`. A `media` line gives a media player its transport:
+
+```
+group "Musik"
+    media media_player.squeezebox label "Squeezer"
+end
+```
+
+which shows what is playing -- artist, title, station and volume, whichever of
+them Home Assistant is sending -- over a row of buttons for previous,
+play/pause, next and volume. See
 [examples/dashboard.cfg](examples/dashboard.cfg) for a worked example.
 
 You do not have to edit the file, though: **Project → Settings…** opens a
 window where you pick which of the available entities appear, put them in
-groups, name the groups, order them, and set how each is shown -- including
-the range for a gauge, which is the one thing that cannot be guessed. Save
-writes the file back.
+groups, name the groups, order them, and set how each is shown -- the range
+for a gauge, a camera's size and refresh interval, and how many group boxes
+sit side by side (`columns`). Save writes the file back, Use applies the
+change without writing it.
 
 Note that MUI's cycle gadgets open a popup menu: press and hold, then
 release over the entry you want.
@@ -237,6 +269,15 @@ ami2ha talks to Home Assistant's
 a long-lived access token, which you create under your Home Assistant profile.
 The WebSocket API pushes state changes, so the Amiga is not polling.
 
+The link is watched rather than assumed: ami2ha pings every 30 seconds and,
+if nothing answers within 90, says the connection is gone instead of showing
+this morning's values indefinitely. **Project → Reconnect** (right-Amiga R)
+forces a fresh connection at any time — which is also how you pick up an
+entity you have only just labelled in Home Assistant, since the entity list is
+requested when the connection is made. If the *first* connection fails, a
+requester says why and offers Retry, so a Workbench launch does not simply
+exit without explanation.
+
 By default the connection is plain HTTP and is intended for use on your own
 LAN. **Your access token is sent in cleartext in that mode** — anyone able to
 observe your local network can read it.
@@ -301,10 +342,11 @@ back. See [docs/AREXX.md](docs/AREXX.md) for the full command set.
 - [x] Settings window: groups, choose entities, reorder, save
 - [x] HTTPS via AmiSSL, with certificate and host name verification
 - [x] Camera snapshots as dashboard tiles, scaled server-side
+- [x] Media player rows: what is playing, transport and volume
 - [ ] Drag-and-drop reordering (nice-to-have; Up/Down works today)
 - [x] Reconnect handling and connection status UI
 - [x] ARexx host port
-- [ ] Optional AmiSSL support
+- [x] Optional AmiSSL support
 - [x] Workbench launch via icon tool types (WRITEICON)
 - [x] Installer, AmigaGuide manual, release archive
 

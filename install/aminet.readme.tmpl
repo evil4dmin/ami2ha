@@ -22,14 +22,19 @@ WHAT IT DOES
 
   - sensors, gauges, toggles and buttons on a configurable MUI dashboard
   - camera snapshots as tiles, fetched on a click or on a timer, scaled
-    by the server so a 68k only has a small picture to decode
+    by the server so a 68k only has a small picture to decode, and
+    saveable to disk under the name you gave the tile
+  - media players: what is playing -- title, artist, station and volume
+    -- over buttons for previous, play/pause, next and volume
   - pick which entities appear by giving them a label in Home Assistant,
     so you can change what the Amiga shows without touching the Amiga
   - a settings window for grouping, ordering, labelling and choosing how
     each entity is displayed
   - an ARexx port (AMI2HA): GET, ATTR, LIST, TOGGLE, ON, OFF, CALL,
     STATUS, so other programs can read the house and control it
-  - reconnects by itself when the link drops, backing off up to a minute
+  - reconnects by itself when the link drops, backing off up to a minute,
+    and notices a connection that has died quietly rather than showing
+    stale values for hours
   - talks https where AmiSSL 5 is installed, checking the certificate and
     the host name, so the access token can safely leave your own network --
     Home Assistant Cloud included
@@ -95,6 +100,7 @@ a slow machine time.
 NOT YET
 
   - drag-and-drop reordering; Up and Down work today
+  - cover art for media players; the text and the transport work today
 
 
 LICENCE

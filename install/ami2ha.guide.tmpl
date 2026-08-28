@@ -17,6 +17,7 @@
 @{" A worked example  " link EXAMPLE}
 @{" The dashboard     " link DASHBOARD}
 @{" Cameras           " link CAMERAS}
+@{" Media players     " link MEDIA}
 @{" Settings          " link SETTINGS}
 @{" Starting it       " link STARTING}
 @{" ARexx             " link AREXX}
@@ -208,6 +209,12 @@ And open it:
 The configuration file remembers the host and the token file, so from
 here on CONFIG and GUI are all you need.
 
+If that first connection fails -- the server is off, the address is wrong,
+the token has been revoked -- a requester says what went wrong and offers
+@{b}Retry@{ub}. Fix the problem and press it; there is no need to start the
+program again. This matters when ami2ha is launched from Workbench, where a
+message printed to a Shell would be seen by nobody.
+
 @endnode
 
 @node EXAMPLE "A worked example"
@@ -322,6 +329,41 @@ same format.
 
 @endnode
 
+@node MEDIA "Media players"
+
+@{b}What is playing, and the buttons to change it@{ub}
+
+  A media player entity goes on the dashboard as one row: a line saying what
+  is playing, and under it the transport.
+
+    media media_player.squeezebox label "Squeezer"
+
+  The line is built from whatever Home Assistant is sending. A file usually
+  has an artist and a title; a radio stream often has a title and a station
+  but no artist, and a player that is off has none of them -- so the line
+  shows the artist and title when they are there, the station in brackets
+  after them, the volume at the end, and simply the player's state when there
+  is nothing playing at all.
+
+@{b}The buttons@{ub}
+
+  Five of them: @{b}<<@{ub} and @{b}>>@{ub} step tracks, @{b}>/||@{ub} plays
+  or pauses, and @{b}Vol -@{ub} and @{b}Vol +@{ub} step the volume. Each one
+  is a single Home Assistant service call, and the status line says which was
+  sent.
+
+  Whether a player answers all five is up to the player: stepping tracks
+  means nothing on a live radio stream, and some players ignore volume when
+  they are switched off. Nothing here hides a button it thinks will not work
+  -- that would need trusting a feature bitmap over the player itself.
+
+  There is no cover art yet. Home Assistant serves album pictures at whatever
+  size the source happens to be, with no way to ask for a smaller one, and
+  decoding a full-size sleeve for a thumbnail is not something to do to a
+  68k without more thought.
+
+@endnode
+
 @node CAMERAS "Cameras"
 
 @{b}Snapshots, not video@{ub}
@@ -368,6 +410,25 @@ same format.
   One fetch runs at a time whatever you set, so a slow camera cannot pile
   up behind a fast one.
 
+@{b}Keeping a picture@{ub}
+
+  Right-click a tile and choose @{b}Save snapshot@{ub}. It keeps the frame
+  that is on screen rather than fetching a new one, so what you save is what
+  you were looking at, and the status line names the file it wrote.
+
+  They go in @{b}PROGDIR:snapshots@{ub} -- a drawer beside the program, made
+  on the first save -- named after the tile's label and the time, like
+  @{b}Einfahrt-20260828-102900.jpg@{ub}, so the drawer reads the way the
+  dashboard does. A label with spaces or punctuation in it is folded to
+  something a filesystem is happy with. Somewhere else, if you would rather:
+
+    savedir    Work:ami2ha-shots
+
+  Not RAM: by default, deliberately. Snapshots are already in T: while the
+  dashboard is running, and on most systems that is the RAM disk -- so saving
+  there would copy a file from RAM to RAM and still lose it at the next
+  reboot, which is not what saving is for.
+
 @{b}The time under the picture@{ub}
 
   Each tile is captioned with when its picture arrived. Most cameras stamp
@@ -400,6 +461,15 @@ same format.
 @node SETTINGS "Settings"
 
 @{b}Project -> Settings@{ub}, or right-Amiga S.
+
+The rest of that menu: @{b}Reconnect@{ub} (right-Amiga R) drops the
+connection and makes a new one, @{b}About@{ub} (right-Amiga A) names the
+version, and @{b}Quit@{ub} is right-Amiga Q.
+
+Reconnect is worth knowing about for one job in particular: ami2ha asks
+Home Assistant which entities carry your label when it connects, so an
+entity you have just labelled is not there yet. Reconnect picks it up
+without restarting the program.
 
   @{b}Group@{ub}       which group you are editing. New group and Delete
                 group work on this one; Name renames it.
@@ -514,6 +584,18 @@ is in AREXX.md in the source archive.
 @endnode
 
 @node TROUBLE "When it breaks"
+
+@{b}The dashboard is up but nothing changes@{ub}
+
+  A connection can die without either end being told -- a router reboots,
+  the Wi-Fi drops, a cable comes out -- and the socket simply goes quiet.
+  ami2ha therefore pings the server every 30 seconds and, if nothing has
+  come back after 90, stops claiming to be connected and says so in the
+  status line. Left to itself it will not sit there for hours showing
+  values from this morning.
+
+  If you would rather not wait for that, @{b}Project -> Reconnect@{ub}
+  (right-Amiga R) starts a fresh connection immediately.
 
 @{b}"cannot open bsdsocket.library"@{ub}
 

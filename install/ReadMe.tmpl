@@ -107,6 +107,25 @@ Add refresh <seconds> for automatic updates; without it a tile only
 updates when you click it. This needs a JPEG datatype installed, and
 nothing else in ami2ha does.
 
+Right-click a tile for Save snapshot. It keeps the frame you are looking
+at, in PROGDIR:snapshots unless savedir says otherwise, named after the
+tile's label and the time: Einfahrt-20260828-102900.jpg.
+
+
+Media players
+-------------
+
+A media player goes on as one row -- what is playing over a row of
+buttons:
+
+    group "Musik"
+        media media_player.squeezebox label "Squeezebox"
+    end
+
+It shows the title, then the artist and station under it, then previous,
+play/pause, next, volume down and volume up, and the volume itself.
+Whatever Home Assistant sends is what you get; there is no cover art.
+
 
 The manual
 ----------
