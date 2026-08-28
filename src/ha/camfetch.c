@@ -71,6 +71,10 @@ int camfetch_start(camfetch *f, const ha_config *cfg, const char *entity,
     f->err[0] = '\0';
     f->widget = widget;
     f->started = now;
+    f->tls_retries = 0;
+    snprintf(f->host, sizeof f->host, "%s", cfg->host);
+    f->port = cfg->port;
+    f->tls  = cfg->tls;
     snprintf(f->file, sizeof f->file, "%s", file);
 
     if (!cfg->token[0]) {
@@ -136,6 +140,22 @@ int camfetch_service(camfetch *f, int readable, int writable, long now)
         rc = net_connect_done(&f->sock);
         if (rc < 0) {
             const char *detail = net_tls_last_error();
+
+            /*
+             * Only NET_ERR_TLS, and only twice. A rejected certificate comes
+             * back as NET_ERR_CERT and will say the same thing however often
+             * it is asked; the overall CAM_TIMEOUT_TICKS deadline still
+             * applies, so this cannot spin.
+             */
+            if (rc == NET_ERR_TLS && f->tls_retries < 2) {
+                f->tls_retries++;
+                net_disconnect(&f->sock);
+                rc = net_connect(&f->sock, f->host, f->port, f->tls);
+                if (rc >= 0) {
+                    f->state = (rc == NET_OK) ? CAMF_SENDING : CAMF_CONNECTING;
+                    return 0;
+                }
+            }
             return fail(f, detail ? detail : net_error_text(rc));
         }
         if (rc != NET_OK)

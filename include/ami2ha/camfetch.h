@@ -45,6 +45,18 @@ typedef struct {
     int        widget;   /* which dashboard widget asked         */
     char       file[CAM_PATH_MAX];
     char       err[CAM_ERR_MAX];
+    /*
+     * Enough of the server to dial it again without the caller's help. A
+     * dropped TLS handshake has to be retried from inside the fetch: Home
+     * Assistant Cloud tunnels TLS through to the server and drops roughly
+     * one handshake in four, and unlike the main connection -- which has a
+     * reconnect loop with a back-off -- a snapshot gets one attempt and then
+     * the tile just stays empty.
+     */
+    char       host[HA_HOST_MAX];
+    int        port;
+    int        tls;
+    int        tls_retries;
 } camfetch;
 
 void camfetch_init(camfetch *f);
