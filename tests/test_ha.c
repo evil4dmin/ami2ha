@@ -392,6 +392,172 @@ static void test_ping_is_answered_with_pong(void)
     ha_client_free(&c);
 }
 
+/*
+ * A media_player is the worst case for the attribute buffer, and it arrives
+ * in an order that used to defeat it: Home Assistant sends media_content_id
+ * -- a JSON object of stream URLs -- long before media_title, so the fields
+ * a dashboard wants were the ones that did not fit. Attributes taken
+ * verbatim from a Squeezebox playing a radio stream.
+ */
+/*
+ * Home Assistant does not blank an attribute that stops applying, it says so
+ * in the delta's "-" section. Ignoring that left a switched-off media player
+ * still advertising the last track it played, which is what the user
+ * reported.
+ */
+static void test_compact_removals_forget_attributes(void)
+{
+    ha_client   c;
+    probe       p;
+    fake_server s;
+    char        msg[512];
+    static const char *wanted[] = { "media_player.squeezer" };
+    ha_entity  *e;
+
+    setup(&c, &p);
+    server_init(&s);
+    ha_client_set_filter(&c, wanted, 1);
+
+    ha_client_begin(&c);
+    buf_reset(ha_client_out(&c));
+    complete_handshake(&c);
+    server_send(&c, "{\"type\":\"auth_required\"}");
+    CHECK(server_recv(&s, &c, msg, sizeof msg));
+    server_send(&c, "{\"type\":\"auth_ok\"}");
+    CHECK(server_recv(&s, &c, msg, sizeof msg));
+
+    CHECK_INT(server_send(&c,
+        "{\"id\":2,\"type\":\"event\",\"event\":{\"a\":{"
+        "\"media_player.squeezer\":{\"s\":\"playing\",\"a\":{"
+        "\"media_title\":\"Oceanfloor\","
+        "\"media_artist\":\"Mystic Crock\","
+        "\"volume_level\":0.58}}}}}"), 1);
+
+    e = ha_store_get(&c.store, "media_player.squeezer");
+    CHECK(e != NULL);
+    CHECK_STR(ha_entity_attr(e, "media_title"), "Oceanfloor");
+
+    /* Switched off: the state changes and the track attributes go away. */
+    p.changed_calls = 0;
+    CHECK_INT(server_send(&c,
+        "{\"id\":2,\"type\":\"event\",\"event\":{\"c\":{"
+        "\"media_player.squeezer\":{"
+        "\"+\":{\"s\":\"off\"},"
+        "\"-\":{\"a\":[\"media_title\",\"media_artist\"]}}}}}"), 1);
+
+    CHECK_STR(e->state, "off");
+    CHECK(ha_entity_attr(e, "media_title") == NULL);
+    CHECK(ha_entity_attr(e, "media_artist") == NULL);
+    /* volume was not withdrawn, so it stays */
+    CHECK_STR(ha_entity_attr(e, "volume_level"), "0.58");
+    CHECK(p.changed_calls > 0);
+
+    server_free(&s);
+    ha_client_free(&c);
+}
+
+static void test_media_player_attributes_survive(void)
+{
+    ha_client   c;
+    probe       p;
+    ha_entity  *e;
+
+    setup(&c, &p);
+    ha_client_begin(&c);
+    complete_handshake(&c);
+    CHECK_INT(server_send(&c, "{\"type\":\"auth_required\"}"), 1);
+    CHECK_INT(server_send(&c, "{\"type\":\"auth_ok\","
+                              "\"ha_version\":\"2026.7.4\"}"), 1);
+
+    CHECK_INT(server_send(&c,
+        "{\"id\":1,\"type\":\"result\",\"success\":true,\"result\":["
+        "{\"entity_id\":\"media_player.squeezer\",\"state\":\"playing\","
+        "\"attributes\":{"
+        "\"group_members\":[],"
+        "\"volume_level\":0.71,"
+        "\"is_volume_muted\":false,"
+        "\"media_content_id\":\"{\\\"index\\\": 0, \\\"urls\\\": "
+        "[{\\\"url\\\": \\\"https://hirschmilch.de:7001/chillout.mp3\\\"}]}\","
+        "\"media_content_type\":\"playlist\","
+        "\"media_duration\":0,"
+        "\"media_position\":1922,"
+        "\"media_position_updated_at\":\"2026-08-20T22:13:48.855277+00:00\","
+        "\"media_title\":\"Here I Am\","
+        "\"media_artist\":\"Richard Stonefield\","
+        "\"media_channel\":\"Hirschmilch Radio Chillout\","
+        "\"shuffle\":false,"
+        "\"repeat\":\"off\","
+        "\"friendly_name\":\"evil4dmins squeezer\","
+        "\"supported_features\":8320959}}"
+        "]}"), 1);
+
+    CHECK_INT(c.state, HA_ST_READY);
+    e = ha_store_get(&c.store, "media_player.squeezer");
+    CHECK(e != NULL);
+    CHECK_STR(e->state, "playing");
+    CHECK_STR(e->name, "evil4dmins squeezer");
+
+    /* What a dashboard or an ARexx script actually asks for. */
+    CHECK_STR(ha_entity_attr(e, "media_title"), "Here I Am");
+    CHECK_STR(ha_entity_attr(e, "media_artist"), "Richard Stonefield");
+    CHECK_STR(ha_entity_attr(e, "media_channel"), "Hirschmilch Radio Chillout");
+    CHECK_STR(ha_entity_attr(e, "volume_level"), "0.71");
+    CHECK_STR(ha_entity_attr(e, "shuffle"), "false");
+    CHECK_STR(ha_entity_attr(e, "repeat"), "off");
+
+    /* And what must not be allowed to crowd them out. */
+    CHECK(ha_entity_attr(e, "media_content_id") == NULL);
+    CHECK(ha_entity_attr(e, "media_position_updated_at") == NULL);
+    CHECK(ha_entity_attr(e, "entity_picture") == NULL);
+
+    ha_client_free(&c);
+}
+
+static void test_keepalive_ping(void)
+{
+    ha_client   c;
+    probe       p;
+    fake_server s;
+    char        msg[512];
+
+    setup(&c, &p);
+    server_init(&s);
+
+    /* Nothing to keep alive before the connection is up, and saying so is
+     * what lets the caller tell "not sent" from "could not send". */
+    CHECK_INT(ha_client_ping(&c), 0);
+
+    ha_client_begin(&c);
+    buf_reset(ha_client_out(&c));       /* the HTTP upgrade, not a frame */
+    complete_handshake(&c);
+    CHECK_INT(server_send(&c, "{\"type\":\"auth_required\","
+                              "\"ha_version\":\"2026.8.0\"}"), 1);
+    CHECK_INT(server_send(&c, "{\"type\":\"auth_ok\","
+                              "\"ha_version\":\"2026.8.0\"}"), 1);
+    CHECK_INT(server_send(&c,
+        "{\"id\":1,\"type\":\"result\",\"success\":true,\"result\":[]}"), 1);
+    CHECK_INT(c.state, HA_ST_READY);
+
+    /* Discard the auth and subscription traffic, so the next frame the
+     * server reads is the keepalive and nothing else. */
+    buf_reset(ha_client_out(&c));
+    ws_stream_free(&s.from_client);
+    ws_stream_init(&s.from_client);
+
+    CHECK(ha_client_ping(&c));
+    CHECK(server_recv(&s, &c, msg, sizeof msg));
+    CHECK(strstr(msg, "\"type\":\"ping\"") != NULL);
+
+    /* The answer must be accepted quietly: an unknown message type is not a
+     * protocol error, and a pong changes nothing but the fact that it came. */
+    CHECK_INT(server_send(&c, "{\"id\":2,\"type\":\"pong\"}"), 1);
+    CHECK_INT(c.state, HA_ST_READY);
+    CHECK_STR(c.error, "");
+
+    server_free(&s);
+    ha_client_free(&c);
+}
+
 static void test_server_close(void)
 {
     ha_client c;
@@ -824,6 +990,9 @@ void suite_ha(void)
     RUN(test_auth_rejection_is_distinct_from_a_drop);
     RUN(test_reset_forgets_the_template_subscription);
     RUN(test_ping_is_answered_with_pong);
+    RUN(test_media_player_attributes_survive);
+    RUN(test_compact_removals_forget_attributes);
+    RUN(test_keepalive_ping);
     RUN(test_server_close);
     RUN(test_reset_allows_reconnect);
     RUN(test_unchanged_state_does_not_notify);

@@ -301,6 +301,20 @@ static void attr_erase(ha_entity *e, size_t off)
     e->attrs[e->attrs_len] = '\0';
 }
 
+int ha_entity_del_attr(ha_entity *e, const char *key)
+{
+    size_t off;
+
+    if (!key || !*key)
+        return 0;
+    off = attr_find(e, key);
+    if (off == (size_t)-1)
+        return 0;
+    attr_erase(e, off);
+    touch(e);
+    return 1;
+}
+
 int ha_entity_set_attr(ha_entity *e, const char *key, const char *value)
 {
     size_t off, klen, vlen, need;

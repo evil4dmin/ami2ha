@@ -33,8 +33,17 @@
  * setpoints, media titles) without trying to mirror everything Home
  * Assistant sends -- a single media_player can carry several KB of entity
  * picture URLs that we would only throw away.
+ *
+ * A media_player is what sets the size. Title, artist, channel, volume,
+ * shuffle and repeat came to 225 bytes on a real squeezebox playing a radio
+ * stream, and a long track title can add another 50 on top, since a value is
+ * kept up to 63 characters. Overflow is silent -- ha_entity_set_attr just
+ * returns 0 and the attribute is not there -- so the headroom is the only
+ * thing standing between a dashboard and a blank tile. The cost is per
+ * stored entity, and only the entities a dashboard actually asks for are
+ * stored: at 18 of them, going from 192 to 320 is 2.3 KB.
  */
-#define HA_ATTRS_MAX 192
+#define HA_ATTRS_MAX 320
 
 typedef struct ha_entity {
     char entity_id[HA_ENTITY_ID_MAX];
@@ -108,6 +117,14 @@ int ha_entity_set_attr(ha_entity *e, const char *key, const char *value);
 
 /* Drop all attributes, e.g. before applying a fresh state object. */
 void ha_entity_clear_attrs(ha_entity *e);
+
+/*
+ * Forget one attribute. Home Assistant drops attributes that stop applying --
+ * a media player that is switched off has no title -- and something has to
+ * act on that, or the last value it sent stays on the dashboard forever.
+ * Returns 1 if the attribute was there.
+ */
+int ha_entity_del_attr(ha_entity *e, const char *key);
 
 /* Iterate attributes. Pass NULL to start; returns NULL when exhausted.
  * *value is set to the corresponding value. */

@@ -14,7 +14,18 @@ static void notify_changed(ha_client *c, ha_entity *e);
 static const char *const skipped_attrs[] = {
     "friendly_name", "unit_of_measurement", "device_class",
     "entity_picture", "supported_features", "attribution",
-    "supported_color_modes", "device_trackers"
+    "supported_color_modes", "device_trackers",
+    /*
+     * A media_player sends these two ahead of the fields anyone wants to
+     * read, and together they cost 140 of the attribute budget: a real
+     * squeezebox measured 81 bytes of `media_content_id` -- a JSON object
+     * of stream URLs, stored truncated mid-string and useless either way --
+     * which was enough on its own to push media_title, media_artist and
+     * media_channel out of the buffer entirely. `media_position_updated_at`
+     * is the clock reading when the position was sampled, which nothing
+     * here can do anything with.
+     */
+    "media_content_id", "media_position_updated_at"
 };
 
 static void fail_client(ha_client *c, const char *msg)
@@ -375,18 +386,52 @@ static ha_entity *apply_compact_entity(ha_client *c, const char *id,
     return e;
 }
 
-/* A change entry wraps the new values in "+" (and removals in "-"). */
+/*
+ * Drop the attributes named in a "-" section: {"a": ["media_title", ...]}.
+ * Home Assistant stops sending an attribute that no longer applies and says
+ * so here, which is the only notice there is -- a media player switched off
+ * keeps advertising the last track it played if this is ignored.
+ */
+static void apply_compact_removals(ha_client *c, const char *id,
+                                   json_parser *jp)
+{
+    ha_entity *e = ha_store_get(&c->store, id);
+    json_token tok;
+
+    while (json_next(jp, &tok) == JSON_KEY) {
+        int       is_attrs = json_key_is(&tok, "a");
+        json_type vt       = json_next(jp, &tok);
+
+        if (!is_attrs || vt != JSON_ARRAY_BEGIN) {
+            json_skip(jp, &tok);
+            continue;
+        }
+
+        while (json_next(jp, &tok) == JSON_STRING) {
+            char key[40];
+            json_str_copy(&tok, key, sizeof key);
+            if (e)
+                ha_entity_del_attr(e, key);
+        }
+    }
+}
+
+/* A change entry wraps the new values in "+" and removals in "-". */
 static void apply_compact_change(ha_client *c, const char *id, json_parser *jp)
 {
     json_token tok;
 
     while (json_next(jp, &tok) == JSON_KEY) {
-        int       is_plus = json_key_is(&tok, "+");
-        json_type vt      = json_next(jp, &tok);
+        int       is_plus  = json_key_is(&tok, "+");
+        int       is_minus = json_key_is(&tok, "-");
+        json_type vt       = json_next(jp, &tok);
 
         if (is_plus && vt == JSON_OBJECT_BEGIN)
             notify_changed(c, apply_compact_entity(c, id, jp));
-        else
+        else if (is_minus && vt == JSON_OBJECT_BEGIN) {
+            apply_compact_removals(c, id, jp);
+            notify_changed(c, ha_store_get(&c->store, id));
+        } else
             json_skip(jp, &tok);
     }
 }
