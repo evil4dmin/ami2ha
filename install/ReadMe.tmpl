@@ -84,8 +84,12 @@ The certificate is checked by default. A self-signed one needs NOVERIFY
 as well, which keeps the traffic encrypted but stops proving who is
 answering, so use it only on a network you trust. The manual has more.
 
-Only CONFIG belongs in the icon's tool types. The address, the token
-file, the label and the whole layout live in the configuration file.
+The icon's tool types carry the connection: CONFIG, HOST, PORT,
+TOKENFILE, LABEL, TLS and NOVERIFY. Open Information on the icon and
+they are all listed, with the unused ones switched off by the brackets
+around them -- take the brackets away to use one. Anything set there
+overrides the configuration file, which is where the dashboard layout
+lives.
 
 
 Cameras

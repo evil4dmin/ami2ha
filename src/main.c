@@ -417,7 +417,7 @@ struct Library *IconBase = NULL;
 
 static int read_tooltypes(struct WBStartup *wbs, struct cli_args *args,
                           char *cfgbuf, char *hostbuf, char *tokbuf,
-                          LONG *portbuf)
+                          LONG *portbuf, char *labelbuf)
 {
     struct DiskObject *dobj;
     BPTR               olddir = (BPTR)-1;
@@ -457,6 +457,11 @@ static int read_tooltypes(struct WBStartup *wbs, struct cli_args *args,
             *portbuf = atol((const char *)v);
             args->port = portbuf;
         }
+        if ((v = FindToolType((CONST_STRPTR *)dobj->do_ToolTypes,
+                              (CONST_STRPTR)"LABEL")) != NULL) {
+            strncpy(labelbuf, (const char *)v, CFG_LABEL_MAX - 1);
+            args->label = (STRPTR)labelbuf;
+        }
         /* Switches, so only their presence matters -- an icon carrying
          * bare TLS is how Workbench spells the Shell's TLS keyword. */
         if (FindToolType((CONST_STRPTR *)dobj->do_ToolTypes,
@@ -485,8 +490,8 @@ static int read_tooltypes(struct WBStartup *wbs, struct cli_args *args,
 static int write_icon(const char *progname, const struct cli_args *a)
 {
     struct DiskObject *dobj;
-    char  *tt[5];
-    char   buf[3][CFG_PATH_MAX + 16];
+    char  *tt[9];
+    char   buf[8][CFG_PATH_MAX + 16];
     int    n = 0, ok = 0;
 
     IconBase = OpenLibrary("icon.library", 36);
@@ -495,12 +500,54 @@ static int write_icon(const char *progname, const struct cli_args *a)
         return 0;
     }
 
-    if (a->config) { sprintf(buf[n], "CONFIG=%.200s", (char *)a->config);
-                     tt[n] = buf[n]; n++; }
-    if (a->host)   { sprintf(buf[n], "HOST=%.100s", (char *)a->host);
-                     tt[n] = buf[n]; n++; }
-    if (a->tokenfile) { sprintf(buf[n], "TOKENFILE=%.200s", (char *)a->tokenfile);
-                        tt[n] = buf[n]; n++; }
+    /*
+     * Write every tool type the program understands, disabling the ones
+     * not in use by wrapping them in brackets -- the Amiga convention,
+     * and the reason it matters here: Information on the icon is the
+     * first place anyone looks. An icon carrying only CONFIG says the
+     * program understands only CONFIG, so the first person to want the
+     * server address in the icon concluded it could not be done and went
+     * looking in the wrong place entirely.
+     *
+     * Anything set this way overrides the configuration file, which is
+     * why the file stays the sensible home for settings you keep. These
+     * are here to be discovered and switched on, not to be the default.
+     */
+    if (a->config)
+        sprintf(buf[n], "CONFIG=%.200s", (char *)a->config);
+    else
+        strcpy(buf[n], "(CONFIG=Work:ami2ha/ami2ha.cfg)");
+    tt[n] = buf[n]; n++;
+
+    if (a->host)
+        sprintf(buf[n], "HOST=%.100s", (char *)a->host);
+    else
+        strcpy(buf[n], "(HOST=192.168.1.100)");
+    tt[n] = buf[n]; n++;
+
+    if (a->port)
+        sprintf(buf[n], "PORT=%ld", (long)*a->port);
+    else
+        strcpy(buf[n], "(PORT=8123)");
+    tt[n] = buf[n]; n++;
+
+    if (a->tokenfile)
+        sprintf(buf[n], "TOKENFILE=%.200s", (char *)a->tokenfile);
+    else
+        strcpy(buf[n], "(TOKENFILE=Work:ami2ha/ha.token)");
+    tt[n] = buf[n]; n++;
+
+    if (a->label)
+        sprintf(buf[n], "LABEL=%.100s", (char *)a->label);
+    else
+        strcpy(buf[n], "(LABEL=amiga)");
+    tt[n] = buf[n]; n++;
+
+    strcpy(buf[n], a->tls ? "TLS" : "(TLS)");
+    tt[n] = buf[n]; n++;
+    strcpy(buf[n], a->noverify ? "NOVERIFY" : "(NOVERIFY)");
+    tt[n] = buf[n]; n++;
+
     tt[n] = NULL;
 
     dobj = GetDiskObject((STRPTR)progname);      /* keep an existing icon */
@@ -602,6 +649,7 @@ int main(int argc, char **argv)
     static char     wb_host[HA_HOST_MAX];
     static char     wb_tokenfile[CFG_PATH_MAX];
     static LONG     wb_port;
+    static char     wb_label[CFG_LABEL_MAX];
     int             rc_exit = RETURN_OK;
     int             rc;
 
@@ -628,7 +676,8 @@ int main(int argc, char **argv)
          * dashboard -- that is the only thing worth doing without a Shell.
          */
         if (!read_tooltypes((struct WBStartup *)argv, &args,
-                            wb_config, wb_host, wb_tokenfile, &wb_port))
+                            wb_config, wb_host, wb_tokenfile, &wb_port,
+                            wb_label))
             return RETURN_WARN;
         args.gui = TRUE;
         from_workbench = 1;

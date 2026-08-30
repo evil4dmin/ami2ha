@@ -271,18 +271,29 @@ Start to finish, with nothing assumed. Substitute your own address.
   port, which token file to read, the label, and the entire dashboard
   layout. It is the file you keep.
 
-  @{b}The tool types@{ub} in the icon are only how a Workbench launch
-  passes arguments, because there is no command line to put them on.
-  In practice you want exactly one:
+  @{b}The tool types@{ub} in the icon are how a Workbench launch passes
+  arguments, because there is no command line to put them on. Open
+  @{b}Information@{ub} on the icon and you will find all of them, with
+  the ones not in use switched off by the brackets around them:
 
     CONFIG=Work:ami2ha/ami2ha.cfg
+    (HOST=192.168.1.100)
+    (PORT=8123)
+    (TOKENFILE=Work:ami2ha/ha.token)
+    (LABEL=amiga)
+    (TLS)
+    (NOVERIFY)
 
-  HOST and TOKENFILE also exist as tool types, and as command line
-  arguments, because anything given that way @{i}overrides@{ui} the
-  configuration file. That is useful for pointing a test run at another
-  server without editing anything. It is not how you configure the
-  program day to day, and putting your settings in both places is the
-  quickest way to confuse yourself about which one is being used.
+  Remove the brackets to switch one on. Anything set here
+  @{i}overrides@{ui} the configuration file, so the connection can live
+  entirely in the icon if that is how you prefer to work -- server
+  address, port, token file and label -- while the dashboard layout
+  stays in the configuration file, where it is far easier to edit a
+  list of entities.
+
+  The one thing worth remembering is that precedence: if a setting
+  appears in both places, the icon wins. Keeping each setting in one
+  place or the other saves wondering which is in effect.
 
 @endnode
 

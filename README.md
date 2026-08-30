@@ -146,9 +146,28 @@ ami2ha CONFIG=S:ami2ha.cfg TOKENFILE=S:ha.token WRITEICON
 
 writes an icon whose tool types carry those settings, so afterwards the
 program can simply be double-clicked -- no Shell involved. Tool types read
-on a Workbench start are `CONFIG`, `HOST`, `PORT`, `TOKENFILE`, `TLS` and
-`NOVERIFY`, and can be edited in Workbench under Icons -> Information. The
-last two are switches: what matters is whether they are present at all.
+on a Workbench start are `CONFIG`, `HOST`, `PORT`, `TOKENFILE`, `LABEL`,
+`TLS` and `NOVERIFY`. The last two are switches: what matters is whether
+they are present at all.
+
+The icon is written with all of them, the unused ones disabled by the
+brackets Workbench understands, so Icons -> Information shows what the
+program accepts rather than leaving you to guess:
+
+```
+CONFIG=Work:ami2ha/ami2ha.cfg
+(HOST=192.168.1.100)
+(PORT=8123)
+(TOKENFILE=Work:ami2ha/ha.token)
+(LABEL=amiga)
+(TLS)
+(NOVERIFY)
+```
+
+Remove the brackets to switch one on. A tool type overrides the
+configuration file, so the whole connection can live in the icon if you
+prefer, leaving the dashboard layout in the file where a list of entities
+is easier to edit.
 
 ## The dashboard
 
