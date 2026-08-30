@@ -90,6 +90,9 @@ FONT = {
     'H': ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
     '2': ["01110", "10001", "00001", "00010", "00100", "01000", "11111"],
     'I': ["11111", "00100", "00100", "00100", "00100", "00100", "11111"],
+    'T': ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+    'X': ["10001", "10001", "01010", "00100", "01010", "10001", "10001"],
+    '?': ["01110", "10001", "00001", "00110", "00100", "00000", "00100"],
 }
 
 
@@ -251,7 +254,20 @@ def main():
     open(out + "/ami2ha_drawer.info", "wb").write(
         diskobject(WBDRAWER, art("A2H")))
 
-    for n in ("ami2ha_tool", "Install_project", "ami2ha_drawer"):
+    # The manual. Without an icon the guide cannot be opened from Workbench
+    # at all, while the ReadMe and the installer both tell people to read it.
+    # MultiView is spelled out in full because it is not on the command path.
+    open(out + "/ami2ha_guide.info", "wb").write(
+        diskobject(WBPROJECT, art("?"),
+                   default_tool="SYS:Utilities/MultiView"))
+
+    # The ReadMe, for the same reason. MultiView shows plain text too.
+    open(out + "/ReadMe_project.info", "wb").write(
+        diskobject(WBPROJECT, art("TXT"),
+                   default_tool="SYS:Utilities/MultiView"))
+
+    for n in ("ami2ha_tool", "Install_project", "ami2ha_drawer",
+              "ami2ha_guide", "ReadMe_project"):
         import os
         print("%-22s %d bytes" % (n + ".info",
                                   os.path.getsize(out + "/" + n + ".info")))

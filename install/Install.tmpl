@@ -142,6 +142,17 @@
       (help @copyfiles-help)
       (source "ami2ha.guide")
       (dest destdir)
+      (infos)
+    )
+
+    ; The ReadMe, with its icon, so the installed drawer is as readable as
+    ; the archive was. Both icons open in MultiView.
+    (copyfiles
+      (prompt "Copying the ReadMe")
+      (help @copyfiles-help)
+      (source "ReadMe")
+      (dest destdir)
+      (infos)
     )
 
     ; The program's icon. WRITEICON below keeps an existing icon and only

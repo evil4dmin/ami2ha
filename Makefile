@@ -159,6 +159,12 @@ dist: version-check
 	@mv $(DISTDIR)/ami2ha/icons/Install_project.info $(DISTDIR)/ami2ha/Install.info
 	@mv $(DISTDIR)/ami2ha/icons/ami2ha_drawer.info   $(DISTDIR)/ami2ha.info
 	@mv $(DISTDIR)/ami2ha/icons/ami2ha_tool.info     $(DISTDIR)/ami2ha/icons/ami2ha.info
+	@# The manual and the ReadMe get theirs beside the files themselves
+	@# rather than waiting in icons/: both are worth reading before
+	@# deciding to install anything, and without an icon neither can be
+	@# opened from Workbench at all.
+	@mv $(DISTDIR)/ami2ha/icons/ami2ha_guide.info    $(DISTDIR)/ami2ha/ami2ha.guide.info
+	@mv $(DISTDIR)/ami2ha/icons/ReadMe_project.info  $(DISTDIR)/ami2ha/ReadMe.info
 	@cp LICENSE               $(DISTDIR)/ami2ha/LICENSE
 	@cp examples/dashboard.cfg $(DISTDIR)/ami2ha/dashboard.cfg.example
 	@sed -e 's/@VERSION@/$(VERSION)/g' install/ReadMe.tmpl \
