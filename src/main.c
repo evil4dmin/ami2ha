@@ -13,6 +13,8 @@
  */
 #include "ami2ha/compat.h"
 
+#include <stdarg.h>
+
 #include <proto/intuition.h>
 #include <proto/icon.h>
 #include <workbench/startup.h>
@@ -43,7 +45,7 @@ size_t __stack = 32768;
 #define TEMPLATE                                                        \
     "HOST,PORT/N,TOKEN/K,TOKENFILE/K,CONFIG/K,WRITECONFIG/K,"          \
     "GUI/S,LIST/S,WATCH/S,WRITEICON/S,GET/K,TOGGLE/K,ON/K,OFF/K,DOMAIN/K," \
-    "TIMEOUT/N/K,TLS/S,NOVERIFY/S"
+    "TIMEOUT/N/K,TLS/S,NOVERIFY/S,LABEL/K"
 
 struct cli_args {
     STRPTR host;
@@ -69,6 +71,14 @@ struct cli_args {
     LONG  *timeout;
     LONG   tls;
     LONG   noverify;
+    /*
+     * Appended last on purpose. The guide documented LABEL= from the
+     * beginning but it was never in the template, so ReadArgs rejected the
+     * whole command line and printed the usage text -- whose closing line
+     * mentions the token, which is what the first person to hit it went off
+     * and debugged. Adding it at the end cannot shift any existing field.
+     */
+    STRPTR label;
 };
 
 struct app {
@@ -523,6 +533,30 @@ static int write_icon(const char *progname, const struct cli_args *a)
     return ok;
 }
 
+/*
+ * A Workbench launch has no console, so every printf() below it went
+ * nowhere: a double-click on an installation whose host line is still
+ * commented out did nothing at all, with no window and no message. The
+ * flag is set before any of these can fire, and ui_alert() opens
+ * intuition.library itself, so this works long before MUI exists.
+ */
+static int from_workbench = 0;
+
+static void say_error(const char *fmt, ...)
+{
+    char    buf[256];
+    va_list ap;
+
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+
+    if (from_workbench)
+        ui_alert("ami2ha", buf);
+    else
+        printf("ami2ha: %s\n", buf);
+}
+
 static void usage(void)
 {
     printf(
@@ -564,7 +598,6 @@ int main(int argc, char **argv)
     long            deadline_ms;
     const char     *filter_ids[CFG_MAX_WIDGETS];
     int             nfilter = 0;
-    int             from_workbench = 0;
     static char     wb_config[CFG_PATH_MAX];
     static char     wb_host[HA_HOST_MAX];
     static char     wb_tokenfile[CFG_PATH_MAX];
@@ -611,13 +644,29 @@ int main(int argc, char **argv)
     if (!from_workbench) {
         rdargs = (struct RDArgs *)AllocDosObject(DOS_RDARGS, NULL);
         if (!rdargs) {
-            printf("ami2ha: out of memory\n");
+            say_error("out of memory");
             return RETURN_FAIL;
         }
         rdargs->RDA_Flags |= RDAF_NOPROMPT;
 
         rda = ReadArgs((STRPTR)TEMPLATE, (LONG *)&args, rdargs);
         if (!rda) {
+            /*
+             * Name the offending option first. Printing only the usage text
+             * left people reading its closing line -- which happens to
+             * mention the access token -- and concluding their token was
+             * broken when the real problem was an unknown keyword.
+             *
+             * Fault() rather than PrintFault(): the latter writes straight to
+             * the DOS output handle while everything else here goes through
+             * stdio, and the two do not interleave in any dependable order --
+             * the reason it wants to be first is precisely that it must not
+             * end up underneath the usage text.
+             */
+            char why[96];
+
+            if (Fault(IoErr(), (STRPTR)"ami2ha", (STRPTR)why, sizeof why))
+                printf("%s\n\n", why);
             usage();
             if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
             return RETURN_ERROR;
@@ -627,7 +676,7 @@ int main(int argc, char **argv)
     /* --- configuration: the file supplies defaults, the command line wins --- */
     dash = (a2h_config *)malloc(sizeof *dash);
     if (!dash) {
-        printf("ami2ha: out of memory\n");
+        say_error("out of memory");
         if (rda) FreeArgs(rda);
         if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
         return RETURN_FAIL;
@@ -636,12 +685,23 @@ int main(int argc, char **argv)
     if (args.config) {
         char cfgerr[CFG_ERR_MAX];
         if (!cfg_load_file(dash, (const char *)args.config, cfgerr, sizeof cfgerr)) {
-            printf("ami2ha: %s\n", cfgerr);
+            say_error("%s", cfgerr);
             free_dash(&dash);
             if (rda) FreeArgs(rda);
             if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
             return RETURN_ERROR;
         }
+    }
+
+    /*
+     * The command line wins over the file, the same way HOST does. This is
+     * what makes the documented first run work:
+     *
+     *   ami2ha <host> TOKENFILE=... LABEL=amiga WRITECONFIG=dash.cfg
+     */
+    if (args.label) {
+        strncpy(dash->label, (const char *)args.label, sizeof dash->label - 1);
+        dash->label[sizeof dash->label - 1] = '\0';
     }
 
     /*
@@ -666,7 +726,9 @@ int main(int argc, char **argv)
     else if (dash->host[0])
         strncpy(cfg.host, dash->host, sizeof cfg.host - 1);
     else {
-        printf("ami2ha: need a HOST, either as an argument or in a CONFIG file\n");
+        say_error("This installation has no server address yet.\n\n"
+              "Put a 'host' line in the configuration file, or pass one\n"
+              "on the command line.");
         free_dash(&dash);
         if (rda) FreeArgs(rda);
         if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
@@ -687,7 +749,7 @@ int main(int argc, char **argv)
                                    : 8123;
 
     if (cfg.tls && !net_tls_available()) {
-        printf("ami2ha: this build has no TLS support, so TLS cannot be used\n");
+        say_error("this build has no TLS support, so TLS cannot be used");
         free_dash(&dash);
         if (rda) FreeArgs(rda);
         if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
@@ -706,7 +768,7 @@ int main(int argc, char **argv)
                                         : (dash->tokenfile[0] ? dash->tokenfile : NULL);
         if (tf) {
             if (!cfg_read_token_file(tf, token, sizeof token)) {
-                printf("ami2ha: cannot read token from %s\n", tf);
+                say_error("Cannot read the access token from\n%s", tf);
                 free_dash(&dash);
                 if (rda) FreeArgs(rda);
                 if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
@@ -715,9 +777,10 @@ int main(int argc, char **argv)
         } else if (dash->token[0]) {
             strncpy(token, dash->token, sizeof token - 1);
         } else {
-            printf("ami2ha: need TOKEN or TOKENFILE\n"
-                   "  Create a long-lived access token in Home Assistant under\n"
-                   "  your profile, then keep it in a file: TOKENFILE=S:ha.token\n");
+            say_error("There is no access token yet.\n\n"
+                      "Create a long-lived access token in Home Assistant\n"
+                      "under your profile, and keep it in a file -- the\n"
+                      "installer writes ha.token beside the program.");
             free_dash(&dash);
             if (rda) FreeArgs(rda);
             if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
@@ -741,7 +804,7 @@ int main(int argc, char **argv)
 
     rc = net_lib_open();
     if (rc != NET_OK) {
-        printf("ami2ha: %s\n", net_error_text(rc));
+        say_error("%s", net_error_text(rc));
         free_dash(&dash);
         if (rda) FreeArgs(rda);
         if (rdargs) FreeDosObject(DOS_RDARGS, rdargs);
@@ -749,7 +812,7 @@ int main(int argc, char **argv)
     }
 
     if (!ha_client_init(&app.ha, &cfg, &cb, make_seed())) {
-        printf("ami2ha: out of memory\n");
+        say_error("out of memory");
         free_dash(&dash);
         net_lib_close();
         if (rda) FreeArgs(rda);
@@ -787,7 +850,7 @@ int main(int argc, char **argv)
 
     rc = net_connect(&app.sock, cfg.host, cfg.port, cfg.tls);
     if (rc < 0) {
-        printf("ami2ha: %s\n", net_error_text(rc));
+        say_error("%s", net_error_text(rc));
         rc_exit = RETURN_FAIL;
         goto cleanup;
     }
@@ -845,7 +908,7 @@ int main(int argc, char **argv)
                 why = app.ha.error[0] ? app.ha.error
                                       : "The connection could not be made.";
             else {
-                printf("ami2ha: timed out waiting for Home Assistant\n");
+                say_error("timed out waiting for Home Assistant");
                 why = "Home Assistant did not answer in time.";
             }
 
@@ -884,10 +947,11 @@ int main(int argc, char **argv)
         }
 
         if (dash->nwidgets == 0) {
-            printf("ami2ha: GUI needs a CONFIG file describing the dashboard\n"
-                   "  Generate one first:\n"
-                   "    ami2ha %s TOKENFILE=... WRITECONFIG=S:ami2ha.cfg\n",
-                   cfg.host);
+            say_error("Nothing to show yet -- the configuration lists no\n"
+                      "entities.\n\n"
+                      "Either add a 'label' line naming a label you have put\n"
+                      "on entities in Home Assistant, or generate a starting\n"
+                      "point with WRITECONFIG and prune it.");
             rc_exit = RETURN_ERROR;
             goto cleanup;
         }
@@ -902,7 +966,7 @@ int main(int argc, char **argv)
             ui_refresh_all(app.ui);
         }
         if (!app.ui) {
-            printf("ami2ha: %s\n", uierr);
+            say_error("%s", uierr);
             rc_exit = RETURN_FAIL;
             goto cleanup;
         }
@@ -937,7 +1001,7 @@ int main(int argc, char **argv)
         goto cleanup;
     }
     if (!app.ready) {
-        printf("ami2ha: timed out waiting for Home Assistant\n");
+        say_error("timed out waiting for Home Assistant");
         rc_exit = RETURN_FAIL;
         goto cleanup;
     }
