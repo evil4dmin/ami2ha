@@ -243,6 +243,13 @@ typedef struct {
      */
     Object *rgb[3];
     Object *swatch;
+    /*
+     * On/off for a dimmer or a colour light. Deliberately outside the part
+     * that greys out: a lamp that is off reports no colour, so the colour
+     * control is disabled -- and that is exactly when you want to be able
+     * to switch the thing on.
+     */
+    Object *onoff;
     long    send_at;    /* ui_now() tick to send at; 0 when nothing is due */
     int     pending;    /* percent for a dimmer, packed 0xRRGGBB for colour */
     int     shown;      /* what the gadget last read as, to spot a change  */
@@ -261,6 +268,13 @@ typedef struct {
      * which feels exactly like the slider fighting you.
      */
     long    hold;
+    /*
+     * An update that arrived during that hold and still has to be applied.
+     * Dropping it outright was wrong: "the lamp went off" is usually the
+     * last word on the subject, so the row went on showing a brightness
+     * for a lamp that was no longer on.
+     */
+    int     stale;
 } ui_widget;
 
 struct a2h_ui {
@@ -377,6 +391,19 @@ static long gauge_position(const a2h_widget *w, const ha_entity *e)
  * Construction
  * ------------------------------------------------------------------ */
 
+/* The same checkmark a toggle uses, kept its natural size. */
+static Object *make_onoff(void)
+{
+    return MUI_NewObject(MUIC_Image,
+        MUIA_Frame,        MUIV_Frame_ImageButton,
+        MUIA_InputMode,    MUIV_InputMode_Toggle,
+        MUIA_Image_Spec,   (IPTR)MUII_CheckMark,
+        MUIA_ShowSelState, FALSE,
+        MUIA_Background,   MUII_ButtonBack,
+        MUIA_Weight,       (IPTR)0,
+        TAG_DONE);
+}
+
 static Object *make_label(const char *text)
 {
     return MUI_NewObject(MUIC_Text,
@@ -484,9 +511,13 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             TAG_DONE);
         if (!uw->control || !uw->value)
             return 0;
+        uw->onoff = make_onoff();
+        if (!uw->onoff)
+            return 0;
         DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
         DoMethod(parent, OM_ADDMEMBER, (IPTR)MUI_NewObject(MUIC_Group,
             MUIA_Group_Horiz,  TRUE,
+            MUIA_Group_Child,  (IPTR)uw->onoff,
             MUIA_Group_Child,  (IPTR)uw->control,
             MUIA_Group_Child,  (IPTR)uw->value,
             TAG_DONE));
@@ -548,11 +579,16 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             MUIA_Group_Child, (IPTR)uw->swatch,
             MUIA_Group_Child, (IPTR)rows,
             TAG_DONE);
-        if (!uw->control)
+        uw->onoff = make_onoff();
+        if (!uw->control || !uw->onoff)
             return 0;
 
         DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
-        DoMethod(parent, OM_ADDMEMBER, (IPTR)uw->control);
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)MUI_NewObject(MUIC_Group,
+            MUIA_Group_Horiz, TRUE,
+            MUIA_Group_Child, (IPTR)uw->onoff,
+            MUIA_Group_Child, (IPTR)uw->control,
+            TAG_DONE));
         return 1;
     }
 
@@ -822,8 +858,15 @@ static void bind_controls(a2h_ui *ui)
          * fetched a picture at all. The value controls are polled in
          * pending_tick instead, which already runs on every pass.
          */
-        if (w->kind == W_DIMMER || w->kind == W_COLOR)
+        if (w->kind == W_DIMMER || w->kind == W_COLOR) {
+            /* The checkbox is a click, not a stream, so it is notified in
+             * the ordinary way. It reports as the widget itself. */
+            if (ui->widgets[i].onoff)
+                DoMethod(ui->widgets[i].onoff, MUIM_Notify, MUIA_Selected,
+                         MUIV_EveryTime, (IPTR)ui->app, 2,
+                         MUIM_Application_ReturnID, ID_WIDGET_BASE + i);
             continue;
+        }
 
         if (w->kind == W_TOGGLE)
             DoMethod(ui->widgets[i].control, MUIM_Notify, MUIA_Selected,
@@ -1400,11 +1443,22 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
          */
         int pct = ha_attr_pct(e, "brightness", 1);
 
+        /* NoNotify, or showing what the server said fires our own
+         * notification and sends it straight back. */
+        if (uw->onoff)
+            SetAttrs(uw->onoff,
+                MUIA_NoNotify, TRUE,
+                MUIA_Selected, state_is_on(e) ? TRUE : FALSE,
+                TAG_DONE);
+
         if (!uw->armed)
             uw->armed = ui_now() + SETTLE_TICKS * 2;
-        /* Still being handled, or only just let go. */
-        if (uw->send_at || ui_now() < uw->hold)
+        /* Still being handled, or only just let go. Remember that this
+         * one needs applying once the hand is off it. */
+        if (uw->send_at || ui_now() < uw->hold) {
+            uw->stale = 1;
             break;
+        }
 
         /*
          * Only when it actually differs. Writing a value a gadget already
@@ -1446,8 +1500,16 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
     case W_COLOR: {
         int r = 0, g = 0, b = 0;
 
-        if (uw->send_at || ui_now() < uw->hold)
+        if (uw->onoff)
+            SetAttrs(uw->onoff,
+                MUIA_NoNotify, TRUE,
+                MUIA_Selected, state_is_on(e) ? TRUE : FALSE,
+                TAG_DONE);
+
+        if (uw->send_at || ui_now() < uw->hold) {
+            uw->stale = 1;
             break;
+        }
         /*
          * Armed only once the lamp has told us a colour, and disabled
          * until then. A Coloradjust invents a value for itself -- white --
@@ -1994,6 +2056,18 @@ static long pending_tick(a2h_ui *ui)
             }
         }
 
+        /*
+         * The hand is off it and an update was held back while it was on.
+         * The store still has what the server last said, so re-apply it.
+         */
+        if (uw->stale && uw->send_at == 0 && now >= uw->hold) {
+            const ha_entity *e = ha_store_get(&ui->ha->store, w->entity);
+
+            uw->stale = 0;
+            if (e)
+                update_widget(ui, i, e);
+        }
+
         if (uw->send_at == 0)
             continue;
 
@@ -2100,6 +2174,13 @@ static void fire_widget(a2h_ui *ui, int i)
         }
     } else if (w->kind == W_CAMERA) {
         request_snapshot(ui, i);
+    } else if (w->kind == W_DIMMER || w->kind == W_COLOR) {
+        /* Same reasoning as a toggle: send the state that was asked for
+         * rather than a blind toggle, so a stale view cannot invert it. */
+        int want_on = ui->widgets[i].onoff
+                        ? (int)xget(ui->widgets[i].onoff, MUIA_Selected) : 0;
+        ha_client_turn(ui->ha, w->entity, want_on);
+        ui_flash_status(ui, want_on ? "Switching on..." : "Switching off...");
     }
 }
 
