@@ -236,6 +236,7 @@ typedef struct {
     Object *cover_btn[COVER_ACTIONS];
     long    send_at;    /* ui_now() tick to send at; 0 when nothing is due */
     int     pending;    /* percent for a dimmer, packed 0xRRGGBB for colour */
+    int     shown;      /* what the gadget last read as, to spot a change  */
     /*
      * Not armed until the server has told us what this entity currently
      * is. MUI fires a notification while a Coloradjust sets itself up, and
@@ -458,7 +459,6 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             MUIA_Slider_Min,   (IPTR)0,
             MUIA_Slider_Max,   (IPTR)100,
             MUIA_Slider_Level, (IPTR)0,
-            MUIA_Slider_Quiet, TRUE,
             TAG_DONE);
         uw->value = MUI_NewObject(MUIC_Text,
             MUIA_Text_Contents, (IPTR)"-",
@@ -751,29 +751,16 @@ static void bind_controls(a2h_ui *ui)
             continue;
 
         /*
-         * These fire continuously while the knob moves. That is wanted --
-         * it is how the reading beside the slider keeps up -- and the
-         * handler parks the value rather than sending it, so the drag
-         * costs nothing on the wire until it stops.
+         * Deliberately not notified. A slider reports every pixel of a
+         * drag, and each report came back as an application return ID --
+         * but this loop only services the sockets on the pass where MUI
+         * has nothing pending, so a chatty gadget starved the network
+         * outright: with one dimmer on the dashboard no camera ever
+         * fetched a picture at all. The value controls are polled in
+         * pending_tick instead, which already runs on every pass.
          */
-        if (w->kind == W_DIMMER) {
-            DoMethod(ui->widgets[i].control, MUIM_Notify, MUIA_Slider_Level,
-                     MUIV_EveryTime, (IPTR)ui->app, 2,
-                     MUIM_Application_ReturnID, ID_LEVEL_BASE + i);
+        if (w->kind == W_DIMMER || w->kind == W_COLOR)
             continue;
-        }
-        if (w->kind == W_COLOR) {
-            DoMethod(ui->widgets[i].control, MUIM_Notify,
-                     MUIA_Coloradjust_Red, MUIV_EveryTime, (IPTR)ui->app, 2,
-                     MUIM_Application_ReturnID, ID_LEVEL_BASE + i);
-            DoMethod(ui->widgets[i].control, MUIM_Notify,
-                     MUIA_Coloradjust_Green, MUIV_EveryTime, (IPTR)ui->app, 2,
-                     MUIM_Application_ReturnID, ID_LEVEL_BASE + i);
-            DoMethod(ui->widgets[i].control, MUIM_Notify,
-                     MUIA_Coloradjust_Blue, MUIV_EveryTime, (IPTR)ui->app, 2,
-                     MUIM_Application_ReturnID, ID_LEVEL_BASE + i);
-            continue;
-        }
 
         if (w->kind == W_TOGGLE)
             DoMethod(ui->widgets[i].control, MUIM_Notify, MUIA_Selected,
@@ -1354,11 +1341,22 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
         if (uw->send_at)
             break;              /* the user is still dragging; leave it be */
 
-        if (uw->control)
+        /*
+         * Only when it actually differs. Writing a value a gadget already
+         * holds is not free: MUI still does the work, and this loop only
+         * services its sockets on a pass where MUI has nothing pending, so
+         * a control rewritten on every state update starved the network
+         * outright -- no camera ever fetched a picture, Ctrl-C stopped
+         * working, and it fell over from there. The guard is also why
+         * `shown` exists: it is what we last put in the gadget.
+         */
+        if (uw->control && (pct < 0 ? 0 : pct) != uw->shown) {
+            uw->shown = pct < 0 ? 0 : pct;
             SetAttrs(uw->control,
                 MUIA_NoNotify,     TRUE,
-                MUIA_Slider_Level, (IPTR)(pct < 0 ? 0 : pct),
+                MUIA_Slider_Level, (IPTR)uw->shown,
                 TAG_DONE);
+        }
         if (uw->value) {
             if (pct < 0)
                 strcpy(uw->text, state_is_on(e) ? "on" : "-");
@@ -1384,8 +1382,14 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
          * fire. It comes alive when the light does.
          */
         if (uw->control && ha_attr_rgb(e, "rgb_color", &r, &g, &b)) {
-            uw->armed = 1;
-            set(uw->control, MUIA_Disabled, FALSE);
+            int packed = (r << 16) | (g << 8) | b;
+
+            if (!uw->armed) {
+                uw->armed = 1;
+                set(uw->control, MUIA_Disabled, FALSE);
+            }
+            if (packed == uw->shown)
+                break;                      /* nothing changed; see above */
             SetAttrs(uw->control,
                 MUIA_NoNotify,          TRUE,
                 /* Each gun is 32 bits here and 8 on the wire, and the
@@ -1395,6 +1399,7 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
                 MUIA_Coloradjust_Green, (IPTR)((ULONG)g * 0x01010101UL),
                 MUIA_Coloradjust_Blue,  (IPTR)((ULONG)b * 0x01010101UL),
                 TAG_DONE);
+            uw->shown = (r << 16) | (g << 8) | b;
         } else if (uw->control && !uw->armed) {
             set(uw->control, MUIA_Disabled, TRUE);
         }
@@ -1827,41 +1832,9 @@ static void fire_media(a2h_ui *ui, int i, int action)
     ui_flash_status(ui, said[action]);
 }
 
-/*
- * Note what the user has asked for and when it should go. Called from the
- * notification, which arrives on every pixel of a drag: the deadline keeps
- * moving out until the knob stops, so exactly one service call is made.
- */
-static void level_changed(a2h_ui *ui, int i)
-{
-    const a2h_widget *w;
-    ui_widget        *uw;
-
-    if (i < 0 || i >= ui->nwidgets)
-        return;
-    w  = &ui->cfg->widgets[i];
-    uw = &ui->widgets[i];
-    if (!uw->control || !uw->armed)
-        return;
-
-    if (w->kind == W_DIMMER) {
-        uw->pending = (int)xget(uw->control, MUIA_Slider_Level);
-        sprintf(uw->text, "%d%%", uw->pending);
-        if (uw->value)
-            set(uw->value, MUIA_Text_Contents, (IPTR)uw->text);
-    } else if (w->kind == W_COLOR) {
-        /* MUI keeps each gun as a 32-bit value; Home Assistant wants
-         * 0..255, which is the top byte of it. */
-        int r = (int)((ULONG)xget(uw->control, MUIA_Coloradjust_Red)   >> 24);
-        int g = (int)((ULONG)xget(uw->control, MUIA_Coloradjust_Green) >> 24);
-        int b = (int)((ULONG)xget(uw->control, MUIA_Coloradjust_Blue)  >> 24);
-        uw->pending = (r << 16) | (g << 8) | b;
-    } else {
-        return;
-    }
-
-    uw->send_at = ui_now() + SETTLE_TICKS;
-}
+/* Both live further down; pending_tick sends, so it needs them here. */
+static int  flush_output(a2h_ui *ui);
+static void connection_lost(a2h_ui *ui, const char *why);
 
 /* Send anything whose level has stopped moving. Returns ms until the next
  * one is due, or -1 when nothing is pending, in the shape the main loop's
@@ -1870,12 +1843,41 @@ static long pending_tick(a2h_ui *ui)
 {
     long now  = ui_now();
     long next = -1;
-    int  i;
+    int  i, sent = 0;
 
     for (i = 0; i < ui->nwidgets; i++) {
         const a2h_widget *w  = &ui->cfg->widgets[i];
         ui_widget        *uw = &ui->widgets[i];
         char              data[64];
+
+        /*
+         * Read what the gadget is showing. Polling rather than being told:
+         * see bind_controls. A drag moves the knob many times between two
+         * passes of this loop and only the value it settles on matters.
+         */
+        if (uw->armed && uw->control &&
+            (w->kind == W_DIMMER || w->kind == W_COLOR)) {
+            int now_val;
+
+            if (w->kind == W_DIMMER) {
+                now_val = (int)xget(uw->control, MUIA_Slider_Level);
+            } else {
+                int r = (int)((ULONG)xget(uw->control, MUIA_Coloradjust_Red)   >> 24);
+                int g = (int)((ULONG)xget(uw->control, MUIA_Coloradjust_Green) >> 24);
+                int b = (int)((ULONG)xget(uw->control, MUIA_Coloradjust_Blue)  >> 24);
+                now_val = (r << 16) | (g << 8) | b;
+            }
+
+            if (now_val != uw->shown) {
+                uw->shown   = now_val;
+                uw->pending = now_val;
+                uw->send_at = now + SETTLE_TICKS;
+                if (w->kind == W_DIMMER && uw->value) {
+                    sprintf(uw->text, "%d%%", now_val);
+                    set(uw->value, MUIA_Text_Contents, (IPTR)uw->text);
+                }
+            }
+        }
 
         if (uw->send_at == 0)
             continue;
@@ -1902,7 +1904,19 @@ static long pending_tick(a2h_ui *ui)
                                        w->entity, data);
         }
         ui_flash_status(ui, w->label);
+        sent = 1;
     }
+
+    /*
+     * Only when something actually went out. Flushing on every pass of the
+     * loop instead put connection_lost() one failed write away from firing
+     * at any moment -- including in the middle of a camera fetch, which
+     * runs on its own socket and does not survive having the world torn
+     * down underneath it. That crashed the program a few seconds after the
+     * first snapshot every time, and left the tiles empty.
+     */
+    if (sent && !flush_output(ui))
+        connection_lost(ui, "Send failed");
 
     return next;
 }
@@ -2304,8 +2318,6 @@ int ui_run(a2h_ui *ui)
          * there until something else happened to. */
         if (send_ms >= 0 && (wait_ms < 0 || send_ms < wait_ms))
             wait_ms = send_ms;
-        if (!flush_output(ui))
-            connection_lost(ui, "Send failed");
 
         id = DoMethod(ui->app, MUIM_Application_NewInput, (IPTR)&sigs);
 
@@ -2359,13 +2371,6 @@ int ui_run(a2h_ui *ui)
                        (int)(off % ID_COVER_STRIDE));
             if (!flush_output(ui))
                 connection_lost(ui, "Send failed");
-            continue;
-        }
-
-        /* Only parks the value; the settle timer does the sending, so a
-         * drag costs nothing here. */
-        if (id >= ID_LEVEL_BASE && id < ID_LEVEL_BASE + 100000) {
-            level_changed(ui, (int)(id - ID_LEVEL_BASE));
             continue;
         }
 
