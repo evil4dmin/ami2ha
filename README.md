@@ -252,6 +252,13 @@ change without writing it.
 Note that MUI's cycle gadgets open a popup menu: press and hold, then
 release over the entry you want.
 
+One thing to know if you use both: when the configuration has a `label`
+line, the label decides what is fetched, and a widget you added by hand for
+an entity that does not carry that label is never requested. It appears on
+the dashboard and shows nothing — which looks like a broken widget rather
+than a missing subscription. Label it in Home Assistant too, or drop the
+`label` line and list everything explicitly.
+
 ### Or choose the entities in Home Assistant
 
 Rather than listing them, tag entities with a label in Home Assistant and

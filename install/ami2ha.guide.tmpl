@@ -174,6 +174,22 @@ dozen. There are two ways to say which.
   @{"The dashboard" link DASHBOARD} for the format. This suits a fixed
   display you do not intend to change.
 
+@{b}Do not half-mix the two@{ub}
+
+  It is one or the other, and this is the trap: if the configuration has
+  a @{b}label@{ub} line, the label decides what gets fetched, and a widget
+  you added by hand for an entity that does @{i}not@{ui} carry that label
+  is never asked for at all.
+
+  Nothing complains. The widget appears, correctly labelled and in the
+  right place, and simply shows nothing -- a reading stays "-", a cover
+  shows no position, a colour control never becomes usable. It looks
+  exactly like a broken widget rather than an entity that was never
+  requested.
+
+  So either label the entity in Home Assistant too, or take the label
+  line out of the configuration and list everything explicitly.
+
 @{b}Finding entity ids@{ub}
 
   To see what your server offers:
