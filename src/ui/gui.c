@@ -253,7 +253,14 @@ typedef struct {
      * window pushed white at full brightness to the lamp before anyone had
      * touched anything. A control must not send a value it invented.
      */
-    int     armed;
+    long    armed;      /* ui_now() tick from which user input is believed */
+    /*
+     * While a hand is on the control, the server does not get to move it.
+     * Without this the lamp's answer to the last thing sent arrives
+     * mid-drag and drags the knob back to whatever the lamp currently is,
+     * which feels exactly like the slider fighting you.
+     */
+    long    hold;
 } ui_widget;
 
 struct a2h_ui {
@@ -1393,9 +1400,11 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
          */
         int pct = ha_attr_pct(e, "brightness", 1);
 
-        uw->armed = 1;
-        if (uw->send_at)
-            break;              /* the user is still dragging; leave it be */
+        if (!uw->armed)
+            uw->armed = ui_now() + SETTLE_TICKS * 2;
+        /* Still being handled, or only just let go. */
+        if (uw->send_at || ui_now() < uw->hold)
+            break;
 
         /*
          * Only when it actually differs. Writing a value a gadget already
@@ -1421,6 +1430,8 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
              * colour away like that.
              */
             uw->shown = (int)xget(uw->control, MUIA_Slider_Level);
+            /* And give it that moment before believing it again. */
+            uw->armed = ui_now() + SETTLE_TICKS * 2;
         }
         if (uw->value) {
             if (pct < 0)
@@ -1435,7 +1446,7 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
     case W_COLOR: {
         int r = 0, g = 0, b = 0;
 
-        if (uw->send_at)
+        if (uw->send_at || ui_now() < uw->hold)
             break;
         /*
          * Armed only once the lamp has told us a colour, and disabled
@@ -1451,7 +1462,7 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
             int gun[3], c;
 
             if (!uw->armed) {
-                uw->armed = 1;
+                uw->armed = ui_now() + SETTLE_TICKS * 2;
                 set(uw->control, MUIA_Disabled, FALSE);
             }
             if (packed == uw->shown)
@@ -1471,6 +1482,7 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
                 uw->shown = (uw->shown << 8) |
                             (uw->rgb[c] ? (int)xget(uw->rgb[c], MUIA_Slider_Level)
                                         : 0);
+            uw->armed = ui_now() + SETTLE_TICKS * 2;
 
             /* A Colorfield gun is 32 bits and the wire carries 8, and the
              * conversion has to fill the whole word: 0xFF becomes
@@ -1936,7 +1948,17 @@ static long pending_tick(a2h_ui *ui)
          * see bind_controls. A drag moves the knob many times between two
          * passes of this loop and only the value it settles on matters.
          */
-        if (uw->armed && uw->control &&
+        /*
+         * Not until the gadget has had a moment to settle after we last
+         * wrote to it. A slider does not always report the value it was
+         * just handed straight away, and reading it too soon looks exactly
+         * like the user having moved it -- which, with zero meaning off,
+         * switched two lamps off on their own within a minute of the
+         * window opening. Anything the gadget does in the first fraction
+         * of a second after a write is the gadget catching up, not a
+         * person.
+         */
+        if (uw->armed && now >= uw->armed && uw->control &&
             (w->kind == W_DIMMER || w->kind == W_COLOR)) {
             int now_val;
 
@@ -1953,6 +1975,7 @@ static long pending_tick(a2h_ui *ui)
                 uw->shown   = now_val;
                 uw->pending = now_val;
                 uw->send_at = now + SETTLE_TICKS;
+                uw->hold    = now + SETTLE_TICKS * 4;
                 if (w->kind == W_DIMMER && uw->value) {
                     sprintf(uw->text, "%d%%", now_val);
                     set(uw->value, MUIA_Text_Contents, (IPTR)uw->text);
@@ -1984,7 +2007,16 @@ static long pending_tick(a2h_ui *ui)
         uw->send_at = 0;
 
         if (w->kind == W_DIMMER) {
-            if (ha_json_brightness_pct(data, sizeof data, uw->pending))
+            /*
+             * All the way down means off. turn_on with brightness_pct 0
+             * is not something Home Assistant does anything useful with:
+             * the lamp keeps the brightness it had, reports that back,
+             * and the slider springs up again under the hand that just
+             * dragged it to the bottom.
+             */
+            if (uw->pending <= 0)
+                ha_client_turn(ui->ha, w->entity, 0);
+            else if (ha_json_brightness_pct(data, sizeof data, uw->pending))
                 ha_client_call_service(ui->ha, "light", "turn_on",
                                        w->entity, data);
         } else if (w->kind == W_COLOR) {
