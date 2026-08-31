@@ -169,6 +169,21 @@ int ha_client_call_service(ha_client *c, const char *domain,
                            const char *service, const char *entity_id,
                            const char *json_data);
 
+/*
+ * Service payloads for the controls that carry a value. These build the
+ * JSON rather than the GUI doing it inline: the exact shape Home Assistant
+ * expects is the part most likely to be wrong, and it is worth being able
+ * to test it without a lamp.
+ *
+ * Both write a complete service_data object and return the length, or 0 if
+ * the buffer is too small.
+ */
+size_t ha_json_brightness_pct(char *dst, size_t dstsz, int pct);
+size_t ha_json_rgb_color(char *dst, size_t dstsz, int r, int g, int b);
+
+/* "open_cover", "stop_cover", "close_cover" for 0, 1, 2; NULL otherwise. */
+const char *ha_cover_service(int action);
+
 int ha_client_toggle(ha_client *c, const char *entity_id);
 int ha_client_turn(ha_client *c, const char *entity_id, int on);
 

@@ -16,6 +16,7 @@
 @{" First run         " link FIRSTRUN}
 @{" A worked example  " link EXAMPLE}
 @{" The dashboard     " link DASHBOARD}
+@{" Dimmers and blinds " link LIGHTS}
 @{" Cameras           " link CAMERAS}
 @{" Media players     " link MEDIA}
 @{" Settings          " link SETTINGS}
@@ -372,6 +373,54 @@ same format.
   size the source happens to be, with no way to ask for a smaller one, and
   decoding a full-size sleeve for a thumbnail is not something to do to a
   68k without more thought.
+
+@endnode
+
+@node LIGHTS "Dimmers, colour and blinds"
+
+  @{b}dimmer@{ub} puts a light's brightness on a slider:
+
+    group "Licht"
+        dimmer light.wohnzimmer label "Wohnzimmer"
+    end
+
+  It reads @{b}-@{ub} rather than 0% while the lamp is off. A lamp that is
+  off reports no brightness at all, and showing 0% would say someone had
+  dimmed it right down, which is a different thing.
+
+  @{b}color@{ub} gives an RGB light red, green and blue with a preview:
+
+    group "Farbe"
+        color light.strip label "LED Strip"
+    end
+
+  It is greyed out until the light is on and reports a colour. That is
+  deliberate: an off lamp has no colour to show, and a control that made
+  one up would send it the moment the window opened -- which it did, once,
+  turning a lamp on at full white before anyone had touched anything.
+
+  It is also a tall gadget, three sliders and a swatch, so a colour light
+  is a taller row than a lamp. And it asks the screen for a pen to draw
+  the preview, which is worth knowing on a 256-colour Workbench where pens
+  are a finite resource.
+
+  @{b}cover@{ub} is a blind, shutter or awning:
+
+    group "Rollladen"
+        cover cover.kueche label "Kueche"
+    end
+
+  Open, Stop and Close, with the position beside them when the cover
+  reports one and its state -- open, closing -- when it does not. Stop is
+  why a cover is not a toggle: it is what you reach for when the blind is
+  travelling the wrong way, and a checkbox has no way to offer it. It is
+  also sent the instant you press it, while a slider waits until you let
+  go, because a third of a second of politeness is a third of a second of
+  the blind still moving.
+
+  Dragging a slider sends one command when you release it, not one for
+  every pixel it passed through. A 68k can generate those far faster than
+  Home Assistant enjoys receiving them.
 
 @endnode
 

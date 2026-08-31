@@ -203,8 +203,33 @@ labelled `Einfahrt` saves as `Einfahrt-20260828-102900.jpg`. Snapshots go to
 savedir    Work:ami2ha-shots
 ```
 
-Widget kinds are `sensor`, `toggle`, `gauge`, `button`, `text`, `camera` and
-`media`. A `media` line gives a media player its transport:
+Widget kinds are `sensor`, `toggle`, `gauge`, `button`, `text`, `camera`,
+`media`, `dimmer`, `color` and `cover`.
+
+A `dimmer` puts a light's brightness on a slider, a `color` gives an RGB light
+red, green and blue, and a `cover` drives a blind or shutter:
+
+```
+group "Licht"
+    dimmer light.wohnzimmer label "Wohnzimmer"
+    color  light.strip      label "LED Strip"
+end
+
+group "Rollladen"
+    cover cover.kueche label "Küche"
+end
+```
+
+A dimmer reads `-` rather than `0%` when the lamp is off, because a lamp that
+is off reports no brightness at all and 0% would claim someone had dimmed it
+right down. A colour control stays greyed out until the light is on and
+reports a colour: an off lamp has no colour to show, and a control that
+invented one would push it to the light the moment the window opened. A cover
+shows its position where it has one, and open/opening/closed otherwise.
+
+Dragging a slider sends one command when you let go, not one per pixel.
+
+A `media` line gives a media player its transport:
 
 ```
 group "Musik"

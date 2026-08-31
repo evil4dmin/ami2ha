@@ -65,7 +65,10 @@ typedef enum {
     W_GAUGE,      /* value drawn as a bar between min/max  */
     W_TEXT,       /* static caption, no entity             */
     W_CAMERA,     /* snapshot from a camera entity          */
-    W_MEDIA       /* media player: what is playing, + transport */
+    W_MEDIA,      /* media player: what is playing, + transport */
+    W_DIMMER,     /* light brightness on a slider, 0..100%   */
+    W_COLOR,      /* rgb light: three sliders and a swatch   */
+    W_COVER       /* blind or shutter: open, stop, close     */
 } widget_kind;
 
 typedef struct {

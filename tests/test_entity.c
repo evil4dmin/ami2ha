@@ -253,6 +253,94 @@ static void test_attributes(void)
     ha_store_free(&s);
 }
 
+static void test_brightness_as_percent(void)
+{
+    /* Home Assistant sends 0..255; the slider works in percent. */
+    ha_store   s;
+    ha_entity *e;
+
+    CHECK(ha_store_init(&s, 4));
+    e = ha_store_put(&s, "light.kitchen");
+
+    /* Missing is -1, not 0: a lamp that is off has no brightness at all,
+     * and a slider parked at 0 would claim it was set to zero. */
+    CHECK_INT(ha_attr_pct(e, "brightness", 1), -1);
+
+    ha_entity_set_attr(e, "brightness", "255");
+    CHECK_INT(ha_attr_pct(e, "brightness", 1), 100);
+
+    ha_entity_set_attr(e, "brightness", "0");
+    CHECK_INT(ha_attr_pct(e, "brightness", 1), 0);
+
+    /* Rounded, not truncated -- 128/255 is 50.2%, and a light set to half
+     * must read back as 50 or the slider jumps when the server answers. */
+    ha_entity_set_attr(e, "brightness", "128");
+    CHECK_INT(ha_attr_pct(e, "brightness", 1), 50);
+
+    /* Out of range is clamped rather than believed. */
+    ha_entity_set_attr(e, "brightness", "999");
+    CHECK_INT(ha_attr_pct(e, "brightness", 1), 100);
+    ha_entity_set_attr(e, "brightness", "-5");
+    CHECK_INT(ha_attr_pct(e, "brightness", 1), 0);
+
+    /* Nonsense is missing, not zero. */
+    ha_entity_set_attr(e, "brightness", "unavailable");
+    CHECK_INT(ha_attr_pct(e, "brightness", 1), -1);
+
+    ha_store_free(&s);
+}
+
+static void test_cover_position_is_already_percent(void)
+{
+    /* A cover reports 0..100, so it must not be rescaled. */
+    ha_store   s;
+    ha_entity *e;
+
+    CHECK(ha_store_init(&s, 4));
+    e = ha_store_put(&s, "cover.kitchen");
+
+    ha_entity_set_attr(e, "current_position", "50");
+    CHECK_INT(ha_attr_pct(e, "current_position", 0), 50);
+    ha_entity_set_attr(e, "current_position", "100");
+    CHECK_INT(ha_attr_pct(e, "current_position", 0), 100);
+
+    ha_store_free(&s);
+}
+
+static void test_rgb_attribute(void)
+{
+    ha_store   s;
+    ha_entity *e;
+    int        r = -1, g = -1, b = -1;
+
+    CHECK(ha_store_init(&s, 4));
+    e = ha_store_put(&s, "light.strip");
+
+    CHECK_INT(ha_attr_rgb(e, "rgb_color", &r, &g, &b), 0);
+
+    ha_entity_set_attr(e, "rgb_color", "[255, 128, 0]");
+    CHECK_INT(ha_attr_rgb(e, "rgb_color", &r, &g, &b), 1);
+    CHECK_INT(r, 255); CHECK_INT(g, 128); CHECK_INT(b, 0);
+
+    /* No spaces, which is how it usually arrives. */
+    ha_entity_set_attr(e, "rgb_color", "[1,2,3]");
+    CHECK_INT(ha_attr_rgb(e, "rgb_color", &r, &g, &b), 1);
+    CHECK_INT(r, 1); CHECK_INT(g, 2); CHECK_INT(b, 3);
+
+    /* Too few numbers is a failure, not two thirds of a colour. */
+    ha_entity_set_attr(e, "rgb_color", "[10, 20]");
+    r = g = b = -1;
+    CHECK_INT(ha_attr_rgb(e, "rgb_color", &r, &g, &b), 0);
+    CHECK_INT(r, -1);
+
+    /* Out of range clamps. */
+    ha_entity_set_attr(e, "rgb_color", "[300, -4, 12]");
+    CHECK_INT(ha_attr_rgb(e, "rgb_color", &r, &g, &b), 1);
+    CHECK_INT(r, 255); CHECK_INT(g, 0); CHECK_INT(b, 12);
+
+    ha_store_free(&s);
+}
+
 static void test_attribute_blob_is_bounded(void)
 {
     /* A media_player can carry kilobytes of attributes. The store must
@@ -347,6 +435,9 @@ void suite_entity(void)
     RUN(test_domain);
     RUN(test_change_tracking);
     RUN(test_attributes);
+    RUN(test_brightness_as_percent);
+    RUN(test_cover_position_is_already_percent);
+    RUN(test_rgb_attribute);
     RUN(test_attribute_blob_is_bounded);
     RUN(test_attr_iteration);
     RUN(test_clear_reuses_buckets);
