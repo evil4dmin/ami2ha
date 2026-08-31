@@ -143,80 +143,6 @@ static void complete_handshake(ha_client *c)
 
 /* ---- tests ---- */
 
-static void test_short_arrays_are_kept(void)
-{
-    /* A colour is an array, and every array used to be skipped -- so a
-     * colour light could never report what colour it was. */
-    ha_client c;
-    probe     p;
-    ha_entity *e;
-    int        r = -1, g = -1, b = -1;
-
-    setup(&c, &p);
-    complete_handshake(&c);
-    CHECK_INT(server_send(&c, "{\"type\":\"auth_required\"}"), 1);
-    CHECK_INT(server_send(&c, "{\"type\":\"auth_ok\"}"), 1);
-    CHECK_INT(server_send(&c,
-        "{\"id\":1,\"type\":\"result\",\"success\":true,\"result\":["
-        "{\"entity_id\":\"light.strip\",\"state\":\"on\","
-        "\"attributes\":{\"friendly_name\":\"Strip\","
-        "\"rgb_color\":[0,0,255],\"brightness\":102,"
-        /* Long enough that keeping it would eat the attribute budget, so
-         * it is skipped rather than truncated into a different value. */
-        "\"effect_list\":[\"aaaaaaaaaa\",\"bbbbbbbbbb\",\"cccccccccc\","
-        "\"dddddddddd\",\"eeeeeeeeee\",\"ffffffffff\"]}}"
-        "]}"), 1);
-
-    e = ha_store_get(&c.store, "light.strip");
-    CHECK(e != NULL);
-    if (e) {
-        CHECK_INT(ha_attr_rgb(e, "rgb_color", &r, &g, &b), 1);
-        CHECK_INT(r, 0); CHECK_INT(g, 0); CHECK_INT(b, 255);
-        CHECK_INT(ha_attr_pct(e, "brightness", 1), 40);
-        /* The long one did not make it, and nothing else was corrupted. */
-        CHECK(ha_entity_attr(e, "effect_list") == NULL);
-    }
-
-    ha_client_free(&c);
-}
-
-static void test_service_payloads(void)
-{
-    /* The exact shape Home Assistant expects, which is the part of a new
-     * control most likely to be silently wrong. */
-    char buf[64];
-
-    CHECK(ha_json_brightness_pct(buf, sizeof buf, 50) > 0);
-    CHECK_STR(buf, "{\"brightness_pct\":50}");
-
-    /* Clamped, not believed: a slider cannot produce these, but a stale
-     * value or a bad read could. */
-    CHECK(ha_json_brightness_pct(buf, sizeof buf, 250) > 0);
-    CHECK_STR(buf, "{\"brightness_pct\":100}");
-    CHECK(ha_json_brightness_pct(buf, sizeof buf, -3) > 0);
-    CHECK_STR(buf, "{\"brightness_pct\":0}");
-
-    CHECK(ha_json_rgb_color(buf, sizeof buf, 255, 128, 0) > 0);
-    CHECK_STR(buf, "{\"rgb_color\":[255,128,0]}");
-    CHECK(ha_json_rgb_color(buf, sizeof buf, 300, -1, 12) > 0);
-    CHECK_STR(buf, "{\"rgb_color\":[255,0,12]}");
-
-    /* A buffer that cannot hold the result writes nothing rather than
-     * half a JSON object, which the server would reject in a way nobody
-     * would connect back to here. */
-    CHECK_INT((int)ha_json_brightness_pct(buf, 4, 50), 0);
-    CHECK_INT((int)ha_json_rgb_color(buf, 8, 1, 2, 3), 0);
-}
-
-static void test_cover_services(void)
-{
-    CHECK_STR(ha_cover_service(0), "open_cover");
-    CHECK_STR(ha_cover_service(1), "stop_cover");
-    CHECK_STR(ha_cover_service(2), "close_cover");
-    CHECK(ha_cover_service(3) == NULL);
-    CHECK(ha_cover_service(-1) == NULL);
-}
-
 static void test_full_session(void)
 {
     ha_client   c;
@@ -1056,9 +982,6 @@ static void test_label_with_no_entities(void)
 
 void suite_ha(void)
 {
-    RUN(test_short_arrays_are_kept);
-    RUN(test_service_payloads);
-    RUN(test_cover_services);
     RUN(test_full_session);
     RUN(test_byte_at_a_time);
     RUN(test_rejects_bad_accept);

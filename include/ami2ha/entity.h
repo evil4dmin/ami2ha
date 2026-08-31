@@ -109,22 +109,6 @@ void ha_entity_set_class(ha_entity *e, const char *cls);
 const char *ha_entity_attr(const ha_entity *e, const char *key);
 
 /*
- * Home Assistant reports a light's brightness as 0..255 and a cover's
- * position as 0..100, while both are shown and set here as a percentage.
- * Returns -1 when the attribute is missing or unreadable, which is not the
- * same as 0: a lamp that is off has no brightness at all, and a slider
- * parked at 0 would claim otherwise.
- */
-int ha_attr_pct(const ha_entity *e, const char *key, int scale255);
-
-/*
- * Read an "rgb_color" style attribute -- [255, 128, 0] -- into three
- * 0..255 components. Returns 0 and leaves them alone if the attribute is
- * absent or does not hold three numbers.
- */
-int ha_attr_rgb(const ha_entity *e, const char *key, int *r, int *g, int *b);
-
-/*
  * Set or replace an attribute. Returns 1 on success, 0 if the blob is full
  * (the attribute is then simply not stored -- a display client can live
  * without it, and refusing to grow keeps memory bounded).

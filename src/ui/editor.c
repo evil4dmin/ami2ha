@@ -115,8 +115,7 @@ MakeStaticHook(DestructHook, DestructFunc);
 
 /* Order must match widget_kind: the cycle's active index is the kind. */
 static const char *kind_labels[] = {
-    "reading", "toggle", "button", "gauge", "text", "camera", "media",
-    "dimmer", "color", "cover", NULL
+    "reading", "toggle", "button", "gauge", "text", "camera", "media", NULL
 };
 
 /* Dashboard columns, as offered in the cycle. Index + 1 is the value. */
@@ -144,17 +143,11 @@ static void row_fill(ed_row *r, ha_client *ha, const char *entity,
         strncpy(r->display, entity, sizeof r->display - 1);
     r->display[sizeof r->display - 1] = '\0';
 
-    /*
-     * Annotate anything that is not a plain reading, so the list says what
-     * a row will become. The name comes from cfg_widget_kind_name rather
-     * than a chain of comparisons here: that chain silently labelled every
-     * kind it did not know as a gauge, which is exactly the sort of thing
-     * that goes wrong quietly when a kind is added.
-     */
-    if (kind != W_SENSOR && kind != W_TEXT && kind != W_CAMERA) {
-        char suffix[24];
-        sprintf(suffix, "  (%s)", cfg_widget_kind_name(kind));
-        if (strlen(r->display) + strlen(suffix) < sizeof r->display)
+    if (kind == W_TOGGLE || kind == W_BUTTON || kind == W_GAUGE) {
+        size_t n = strlen(r->display);
+        const char *suffix = (kind == W_TOGGLE) ? "  (toggle)"
+                           : (kind == W_BUTTON) ? "  (button)" : "  (gauge)";
+        if (n + strlen(suffix) < sizeof r->display)
             strcat(r->display, suffix);
     }
 }

@@ -60,9 +60,6 @@ const char *cfg_widget_kind_name(widget_kind k)
     case W_TEXT:   return "text";
     case W_CAMERA: return "camera";
     case W_MEDIA:  return "media";
-    case W_DIMMER: return "dimmer";
-    case W_COLOR:  return "color";
-    case W_COVER:  return "cover";
     }
     return "?";
 }
@@ -283,9 +280,6 @@ static int widget_kind_from(const char *t, widget_kind *k)
     if (strcmp(t, "text")   == 0) { *k = W_TEXT;   return 1; }
     if (strcmp(t, "camera") == 0) { *k = W_CAMERA; return 1; }
     if (strcmp(t, "media")  == 0) { *k = W_MEDIA;  return 1; }
-    if (strcmp(t, "dimmer") == 0) { *k = W_DIMMER; return 1; }
-    if (strcmp(t, "color")  == 0) { *k = W_COLOR;  return 1; }
-    if (strcmp(t, "cover")  == 0) { *k = W_COVER;  return 1; }
     return 0;
 }
 
@@ -591,16 +585,6 @@ static widget_kind kind_for_domain(const char *domain)
 
     if (strcmp(domain, "media_player") == 0)
         return W_MEDIA;
-
-    /*
-     * A blind is never usefully a checkbox: "on" tells you nothing about
-     * whether it is half open. Lights stay toggles, because most are not
-     * dimmable and a slider on a plain bulb is worse than a checkmark --
-     * dimmer and color are opt-in, written by hand or chosen in the
-     * settings window.
-     */
-    if (strcmp(domain, "cover") == 0)
-        return W_COVER;
 
     if (strcmp(domain, "scene")        == 0 ||
         strcmp(domain, "script")       == 0 ||
