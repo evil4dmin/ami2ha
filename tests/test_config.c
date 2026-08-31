@@ -325,6 +325,67 @@ static void test_camera_timestamp_survives_a_write(void)
     cfg_free(&back);
 }
 
+static void test_dimmer_color_and_cover(void)
+{
+    a2h_config cfg, back;
+    char       err[CFG_ERR_MAX];
+    a2h_buf    out;
+
+    CHECK(parse(&cfg,
+        "group \"Licht\"\n"
+        "    dimmer light.wohnzimmer label \"Wohnzimmer\"\n"
+        "    color  light.strip label \"LED Strip\"\n"
+        "end\n"
+        "group \"Rollladen\"\n"
+        "    cover cover.kueche label \"Küche\"\n"
+        "    cover cover.bad\n"
+        "end\n", err, sizeof err));
+
+    CHECK_INT(cfg.nwidgets, 4);
+    CHECK_INT(cfg.widgets[0].kind, W_DIMMER);
+    CHECK_INT(cfg.widgets[1].kind, W_COLOR);
+    CHECK_INT(cfg.widgets[2].kind, W_COVER);
+    CHECK_INT(cfg.widgets[3].kind, W_COVER);
+    CHECK_STR(cfg.widgets[0].entity, "light.wohnzimmer");
+    CHECK_STR(cfg.widgets[1].label, "LED Strip");
+    /* No label given: derived from the id, as for every other kind. */
+    CHECK_STR(cfg.widgets[3].label, "Bad");
+
+    /* The settings window rewrites the whole file on every save, so each
+     * kind has to survive the trip out and back. */
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(parse(&back, (const char *)out.data, err, sizeof err));
+    CHECK_INT(back.nwidgets, 4);
+    CHECK_INT(back.widgets[0].kind, W_DIMMER);
+    CHECK_INT(back.widgets[1].kind, W_COLOR);
+    CHECK_INT(back.widgets[2].kind, W_COVER);
+    /* The source above is UTF-8, as any modern editor would save it, and
+     * the parser transcodes to Latin-1 -- which is what the Amiga draws.
+     * So the expectation is the single high byte, not the two UTF-8 ones. */
+    CHECK_STR(back.widgets[2].label, "K\xfc" "che");
+    buf_free(&out);
+
+    cfg_free(&cfg);
+    cfg_free(&back);
+}
+
+static void test_cover_is_discovered_as_a_cover(void)
+{
+    /* A blind is never usefully a checkbox: "on" says nothing about
+     * whether it is half open. Lights stay toggles on purpose, since most
+     * are not dimmable. */
+    a2h_config cfg;
+
+    cfg_init(&cfg);
+    CHECK(cfg_add_discovered(&cfg, "cover.wohnzimmer", "amiga"));
+    CHECK(cfg_add_discovered(&cfg, "light.kueche", "amiga"));
+    CHECK_INT(cfg.nwidgets, 2);
+    CHECK_INT(cfg.widgets[0].kind, W_COVER);
+    CHECK_INT(cfg.widgets[1].kind, W_TOGGLE);
+    cfg_free(&cfg);
+}
+
 static void test_groups_and_widgets(void)
 {
     a2h_config cfg;
@@ -879,6 +940,8 @@ void suite_config(void)
     RUN(test_camera_timestamp_survives_a_write);
     RUN(test_media_widget);
     RUN(test_media_discovered_from_label);
+    RUN(test_dimmer_color_and_cover);
+    RUN(test_cover_is_discovered_as_a_cover);
     RUN(test_groups_and_widgets);
     RUN(test_label_defaults_from_entity);
     RUN(test_snapshot_name_uses_the_label);

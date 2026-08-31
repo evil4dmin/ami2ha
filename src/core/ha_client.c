@@ -283,8 +283,34 @@ static void apply_attributes(ha_entity *e, const char *at, size_t len)
                 break;
             case JSON_NULL:
                 break;
+            case JSON_ARRAY_BEGIN: {
+                /*
+                 * A colour arrives as an array -- "rgb_color":[0,0,255] --
+                 * and skipping every array meant a colour light could never
+                 * report what colour it was. Keep the raw text of the short
+                 * ones, which is exactly what ha_attr_rgb reads back.
+                 *
+                 * Short ones only: effect_list on a cheap RGB strip runs to
+                 * hundreds of names, and the attribute store is a fixed
+                 * budget shared by every entity on the dashboard. Anything
+                 * that does not fit is skipped as before rather than
+                 * truncated into something that would parse as a different
+                 * colour.
+                 */
+                const char *from = tok.start;
+                size_t      n;
+
+                json_skip(&jp, &tok);
+                n = (size_t)(jp.p - from);
+                if (n > 0 && n < sizeof val) {
+                    memcpy(val, from, n);
+                    val[n] = '\0';
+                    ha_entity_set_attr(e, key, val);
+                }
+                break;
+            }
             default:
-                json_skip(&jp, &tok); /* nested object or array */
+                json_skip(&jp, &tok); /* nested object */
                 break;
             }
         }
@@ -901,6 +927,49 @@ int ha_client_call_service(ha_client *c, const char *domain,
     ok = !m.failed && send_text(c, (const char *)m.data, m.len);
     buf_free(&m);
     return ok;
+}
+
+size_t ha_json_brightness_pct(char *dst, size_t dstsz, int pct)
+{
+    char tmp[48];
+    size_t n;
+
+    if (pct < 0)   pct = 0;
+    if (pct > 100) pct = 100;
+
+    /* brightness_pct rather than brightness: Home Assistant does the
+     * 0..255 conversion, and a percentage is what the slider holds. */
+    n = (size_t)sprintf(tmp, "{\"brightness_pct\":%d}", pct);
+    if (!dst || n + 1 > dstsz)
+        return 0;
+    memcpy(dst, tmp, n + 1);
+    return n;
+}
+
+size_t ha_json_rgb_color(char *dst, size_t dstsz, int r, int g, int b)
+{
+    char tmp[64];
+    size_t n;
+
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+
+    n = (size_t)sprintf(tmp, "{\"rgb_color\":[%d,%d,%d]}", r, g, b);
+    if (!dst || n + 1 > dstsz)
+        return 0;
+    memcpy(dst, tmp, n + 1);
+    return n;
+}
+
+const char *ha_cover_service(int action)
+{
+    switch (action) {
+    case 0: return "open_cover";
+    case 1: return "stop_cover";
+    case 2: return "close_cover";
+    }
+    return NULL;
 }
 
 int ha_client_toggle(ha_client *c, const char *entity_id)

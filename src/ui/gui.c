@@ -134,6 +134,19 @@ static void ui_libs_close(void)
 #define ID_MEDIA_BASE  100000
 #define ID_MEDIA_STRIDE 8
 
+/*
+ * A level that has stopped moving for this long is what the user meant.
+ * Ticks are fiftieths, so this is a third of a second -- long enough to
+ * swallow a drag, short enough that letting go feels immediate.
+ */
+#define SETTLE_TICKS   15
+
+/* Open, Stop, Close. In that order on screen and in the array. */
+#define COVER_ACTIONS  3
+#define ID_LEVEL_BASE  200000
+#define ID_COVER_BASE  300000
+#define ID_COVER_STRIDE 4
+
 /* The transport, in the order the buttons appear. */
 enum {
     MEDIA_PREV = 0,
@@ -212,6 +225,25 @@ typedef struct {
     Object *cam_save;
     int     cam_slot;   /* which of the two files the picture on screen holds */
     int     cam_want;   /* the file the fetch in flight is writing to        */
+
+    /*
+     * Dimmer, colour and cover. A slider notifies on every pixel of a drag,
+     * so what the user asked for is parked here and sent once it stops
+     * moving: one sweep across a slider is otherwise fifty service calls,
+     * which a 68k can generate far faster than Home Assistant enjoys
+     * receiving them.
+     */
+    Object *cover_btn[COVER_ACTIONS];
+    long    send_at;    /* ui_now() tick to send at; 0 when nothing is due */
+    int     pending;    /* percent for a dimmer, packed 0xRRGGBB for colour */
+    /*
+     * Not armed until the server has told us what this entity currently
+     * is. MUI fires a notification while a Coloradjust sets itself up, and
+     * without this that counted as the user choosing a colour: opening the
+     * window pushed white at full brightness to the lamp before anyone had
+     * touched anything. A control must not send a value it invented.
+     */
+    int     armed;
 } ui_widget;
 
 struct a2h_ui {
@@ -414,6 +446,98 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             TAG_DONE));
         return 1;
 
+    case W_DIMMER:
+        /*
+         * A slider rather than a checkbox, because a dimmable lamp has a
+         * hundred useful states and two of them are on and off. The
+         * reading beside it is the number people actually want: MUI can
+         * draw the level on the knob, but not while the slider is also
+         * being told what the server says.
+         */
+        uw->control = MUI_NewObject(MUIC_Slider,
+            MUIA_Slider_Min,   (IPTR)0,
+            MUIA_Slider_Max,   (IPTR)100,
+            MUIA_Slider_Level, (IPTR)0,
+            MUIA_Slider_Quiet, TRUE,
+            TAG_DONE);
+        uw->value = MUI_NewObject(MUIC_Text,
+            MUIA_Text_Contents, (IPTR)"-",
+            MUIA_Text_PreParse, (IPTR)"\33r",
+            MUIA_Frame,         MUIV_Frame_Text,
+            MUIA_FixWidthTxt,   (IPTR)"8888%",
+            TAG_DONE);
+        if (!uw->control || !uw->value)
+            return 0;
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)MUI_NewObject(MUIC_Group,
+            MUIA_Group_Horiz,  TRUE,
+            MUIA_Group_Child,  (IPTR)uw->control,
+            MUIA_Group_Child,  (IPTR)uw->value,
+            TAG_DONE));
+        return 1;
+
+    case W_COLOR:
+        /*
+         * Coloradjust is the only stock class that speaks red, green and
+         * blue directly, which is what Home Assistant wants. It is a tall
+         * gadget -- three sliders and a swatch -- so a colour light is
+         * inherently a taller row than a lamp, and it allocates a pen for
+         * the preview, which is worth knowing on a 256-colour Workbench.
+         */
+        uw->control = MUI_NewObject(MUIC_Coloradjust,
+            MUIA_Disabled, TRUE,
+            TAG_DONE);
+        if (!uw->control)
+            return 0;
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)uw->control);
+        return 1;
+
+    case W_COVER: {
+        /*
+         * What a blind's own remote has, in the order it has them. Stop is
+         * the one that matters on a slat blind and the one a checkbox can
+         * never offer, which is why a cover is not a toggle.
+         */
+        static const char *const cover_labels[COVER_ACTIONS] = {
+            "Open", "Stop", "Close"
+        };
+        Object *row;
+        int     b;
+
+        row = MUI_NewObject(MUIC_Group, MUIA_Group_Horiz, TRUE, TAG_DONE);
+        if (!row)
+            return 0;
+        for (b = 0; b < COVER_ACTIONS; b++) {
+            uw->cover_btn[b] = MUI_NewObject(MUIC_Text,
+                MUIA_Text_Contents, (IPTR)cover_labels[b],
+                MUIA_Text_PreParse, (IPTR)"\33c",
+                MUIA_Frame,         MUIV_Frame_Button,
+                MUIA_Background,    MUII_ButtonBack,
+                MUIA_InputMode,     MUIV_InputMode_RelVerify,
+                TAG_DONE);
+            if (!uw->cover_btn[b])
+                return 0;
+            DoMethod(row, OM_ADDMEMBER, (IPTR)uw->cover_btn[b]);
+        }
+
+        /* Where it actually is. A blind reports 0..100, and "open" alone
+         * does not tell you whether that means fully or a handspan. */
+        uw->value = MUI_NewObject(MUIC_Text,
+            MUIA_Text_Contents, (IPTR)"-",
+            MUIA_Text_PreParse, (IPTR)"\33r",
+            MUIA_Frame,         MUIV_Frame_Text,
+            MUIA_FixWidthTxt,   (IPTR)"8888%",
+            TAG_DONE);
+        if (!uw->value)
+            return 0;
+        DoMethod(row, OM_ADDMEMBER, (IPTR)uw->value);
+
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)row);
+        return 1;
+    }
+
     case W_CAMERA:
         /*
          * Created empty: the picture cannot be decoded until there is a
@@ -610,8 +734,46 @@ static void bind_controls(a2h_ui *ui)
             continue;
         }
 
+        /* A cover is a row of buttons too, so it is bound above the
+         * one-control guard for the same reason the media widget is. */
+        if (w->kind == W_COVER) {
+            int b;
+            for (b = 0; b < COVER_ACTIONS; b++)
+                if (ui->widgets[i].cover_btn[b])
+                    DoMethod(ui->widgets[i].cover_btn[b], MUIM_Notify,
+                             MUIA_Pressed, FALSE, (IPTR)ui->app, 2,
+                             MUIM_Application_ReturnID,
+                             ID_COVER_BASE + i * ID_COVER_STRIDE + b);
+            continue;
+        }
+
         if (!ui->widgets[i].control)
             continue;
+
+        /*
+         * These fire continuously while the knob moves. That is wanted --
+         * it is how the reading beside the slider keeps up -- and the
+         * handler parks the value rather than sending it, so the drag
+         * costs nothing on the wire until it stops.
+         */
+        if (w->kind == W_DIMMER) {
+            DoMethod(ui->widgets[i].control, MUIM_Notify, MUIA_Slider_Level,
+                     MUIV_EveryTime, (IPTR)ui->app, 2,
+                     MUIM_Application_ReturnID, ID_LEVEL_BASE + i);
+            continue;
+        }
+        if (w->kind == W_COLOR) {
+            DoMethod(ui->widgets[i].control, MUIM_Notify,
+                     MUIA_Coloradjust_Red, MUIV_EveryTime, (IPTR)ui->app, 2,
+                     MUIM_Application_ReturnID, ID_LEVEL_BASE + i);
+            DoMethod(ui->widgets[i].control, MUIM_Notify,
+                     MUIA_Coloradjust_Green, MUIV_EveryTime, (IPTR)ui->app, 2,
+                     MUIM_Application_ReturnID, ID_LEVEL_BASE + i);
+            DoMethod(ui->widgets[i].control, MUIM_Notify,
+                     MUIA_Coloradjust_Blue, MUIV_EveryTime, (IPTR)ui->app, 2,
+                     MUIM_Application_ReturnID, ID_LEVEL_BASE + i);
+            continue;
+        }
 
         if (w->kind == W_TOGGLE)
             DoMethod(ui->widgets[i].control, MUIM_Notify, MUIA_Selected,
@@ -1176,6 +1338,88 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
             set(uw->media_vol, MUIA_Text_Contents, (IPTR)uw->media_vol_text);
         break;
 
+    case W_DIMMER: {
+        /*
+         * -1 means the lamp reports no brightness at all, which is what an
+         * "off" light does. Show a dash rather than 0%: zero would claim
+         * the user had dimmed it right down.
+         *
+         * NoNotify for the same reason the toggle needs it -- without it,
+         * showing what the server said fires our own notification and
+         * sends it straight back.
+         */
+        int pct = ha_attr_pct(e, "brightness", 1);
+
+        uw->armed = 1;
+        if (uw->send_at)
+            break;              /* the user is still dragging; leave it be */
+
+        if (uw->control)
+            SetAttrs(uw->control,
+                MUIA_NoNotify,     TRUE,
+                MUIA_Slider_Level, (IPTR)(pct < 0 ? 0 : pct),
+                TAG_DONE);
+        if (uw->value) {
+            if (pct < 0)
+                strcpy(uw->text, state_is_on(e) ? "on" : "-");
+            else
+                sprintf(uw->text, "%d%%", pct);
+            set(uw->value, MUIA_Text_Contents, (IPTR)uw->text);
+        }
+        break;
+    }
+
+    case W_COLOR: {
+        int r = 0, g = 0, b = 0;
+
+        if (uw->send_at)
+            break;
+        /*
+         * Armed only once the lamp has told us a colour, and disabled
+         * until then. A Coloradjust invents a value for itself -- white --
+         * and notifies about it as it lays out, so arming on any state at
+         * all was still enough to push white at full brightness to a lamp
+         * that was merely switched off. An off lamp reports no rgb_color,
+         * so it never arms, and a gadget that cannot be touched cannot
+         * fire. It comes alive when the light does.
+         */
+        if (uw->control && ha_attr_rgb(e, "rgb_color", &r, &g, &b)) {
+            uw->armed = 1;
+            set(uw->control, MUIA_Disabled, FALSE);
+            SetAttrs(uw->control,
+                MUIA_NoNotify,          TRUE,
+                /* Each gun is 32 bits here and 8 on the wire, and the
+                 * conversion has to fill the whole word: 0xFF becomes
+                 * 0xFFFFFFFF, not 0xFF000000, or white comes out grey. */
+                MUIA_Coloradjust_Red,   (IPTR)((ULONG)r * 0x01010101UL),
+                MUIA_Coloradjust_Green, (IPTR)((ULONG)g * 0x01010101UL),
+                MUIA_Coloradjust_Blue,  (IPTR)((ULONG)b * 0x01010101UL),
+                TAG_DONE);
+        } else if (uw->control && !uw->armed) {
+            set(uw->control, MUIA_Disabled, TRUE);
+        }
+        break;
+    }
+
+    case W_COVER: {
+        /* A cover reports 0..100 already, so it is not rescaled. When it
+         * reports nothing, fall back to the state -- open, closed,
+         * opening, closing -- which is still more than a checkbox says. */
+        int pos = ha_attr_pct(e, "current_position", 0);
+
+        if (uw->value) {
+            if (pos < 0) {
+                strncpy(uw->text, e->state[0] ? e->state : "-",
+                        sizeof uw->text - 1);
+                uw->text[sizeof uw->text - 1] = '\0';
+            } else {
+                sprintf(uw->text, "%d%%", pos);
+            }
+            set(uw->value, MUIA_Text_Contents, (IPTR)uw->text);
+        }
+        break;
+    }
+
     case W_BUTTON:
     case W_TEXT:
     case W_CAMERA:
@@ -1583,6 +1827,107 @@ static void fire_media(a2h_ui *ui, int i, int action)
     ui_flash_status(ui, said[action]);
 }
 
+/*
+ * Note what the user has asked for and when it should go. Called from the
+ * notification, which arrives on every pixel of a drag: the deadline keeps
+ * moving out until the knob stops, so exactly one service call is made.
+ */
+static void level_changed(a2h_ui *ui, int i)
+{
+    const a2h_widget *w;
+    ui_widget        *uw;
+
+    if (i < 0 || i >= ui->nwidgets)
+        return;
+    w  = &ui->cfg->widgets[i];
+    uw = &ui->widgets[i];
+    if (!uw->control || !uw->armed)
+        return;
+
+    if (w->kind == W_DIMMER) {
+        uw->pending = (int)xget(uw->control, MUIA_Slider_Level);
+        sprintf(uw->text, "%d%%", uw->pending);
+        if (uw->value)
+            set(uw->value, MUIA_Text_Contents, (IPTR)uw->text);
+    } else if (w->kind == W_COLOR) {
+        /* MUI keeps each gun as a 32-bit value; Home Assistant wants
+         * 0..255, which is the top byte of it. */
+        int r = (int)((ULONG)xget(uw->control, MUIA_Coloradjust_Red)   >> 24);
+        int g = (int)((ULONG)xget(uw->control, MUIA_Coloradjust_Green) >> 24);
+        int b = (int)((ULONG)xget(uw->control, MUIA_Coloradjust_Blue)  >> 24);
+        uw->pending = (r << 16) | (g << 8) | b;
+    } else {
+        return;
+    }
+
+    uw->send_at = ui_now() + SETTLE_TICKS;
+}
+
+/* Send anything whose level has stopped moving. Returns ms until the next
+ * one is due, or -1 when nothing is pending, in the shape the main loop's
+ * other tick functions use. */
+static long pending_tick(a2h_ui *ui)
+{
+    long now  = ui_now();
+    long next = -1;
+    int  i;
+
+    for (i = 0; i < ui->nwidgets; i++) {
+        const a2h_widget *w  = &ui->cfg->widgets[i];
+        ui_widget        *uw = &ui->widgets[i];
+        char              data[64];
+
+        if (uw->send_at == 0)
+            continue;
+
+        if (now < uw->send_at) {
+            long ms = (uw->send_at - now) * 20;
+            if (next < 0 || ms < next)
+                next = ms;
+            continue;
+        }
+
+        uw->send_at = 0;
+
+        if (w->kind == W_DIMMER) {
+            if (ha_json_brightness_pct(data, sizeof data, uw->pending))
+                ha_client_call_service(ui->ha, "light", "turn_on",
+                                       w->entity, data);
+        } else if (w->kind == W_COLOR) {
+            if (ha_json_rgb_color(data, sizeof data,
+                                  (uw->pending >> 16) & 0xFF,
+                                  (uw->pending >> 8) & 0xFF,
+                                  uw->pending & 0xFF))
+                ha_client_call_service(ui->ha, "light", "turn_on",
+                                       w->entity, data);
+        }
+        ui_flash_status(ui, w->label);
+    }
+
+    return next;
+}
+
+/*
+ * Open, Stop, Close. Sent the moment the button is released rather than
+ * through the settle timer: a blind travelling the wrong way is stopped by
+ * pressing Stop, and a third of a second of politeness is a third of a
+ * second of the blind still moving.
+ */
+static void fire_cover(a2h_ui *ui, int i, int action)
+{
+    const a2h_widget *w;
+    const char       *service = ha_cover_service(action);
+
+    if (i < 0 || i >= ui->nwidgets || !service)
+        return;
+    w = &ui->cfg->widgets[i];
+    if (w->kind != W_COVER)
+        return;
+
+    ha_client_call_service(ui->ha, "cover", service, w->entity, NULL);
+    ui_flash_status(ui, w->label);
+}
+
 static void fire_widget(a2h_ui *ui, int i)
 {
     const a2h_widget *w = &ui->cfg->widgets[i];
@@ -1930,7 +2275,7 @@ int ui_run(a2h_ui *ui)
     ui->last_rx = ui->last_ping = ui_now();
 
     for (;;) {
-        long  status_ms, link_ms, watch_ms, wait_ms;
+        long  status_ms, link_ms, watch_ms, send_ms, wait_ms;
         ULONG id;
 
         /*
@@ -1949,11 +2294,18 @@ int ui_run(a2h_ui *ui)
         status_ms = status_tick(ui);
         link_ms   = link_tick(ui);
         watch_ms  = link_watch(ui);
+        send_ms   = pending_tick(ui);
         wait_ms   = status_ms;
         if (link_ms >= 0 && (wait_ms < 0 || link_ms < wait_ms))
             wait_ms = link_ms;
         if (watch_ms >= 0 && (wait_ms < 0 || watch_ms < wait_ms))
             wait_ms = watch_ms;
+        /* A level waiting to be sent has to wake the loop, or it would sit
+         * there until something else happened to. */
+        if (send_ms >= 0 && (wait_ms < 0 || send_ms < wait_ms))
+            wait_ms = send_ms;
+        if (!flush_output(ui))
+            connection_lost(ui, "Send failed");
 
         id = DoMethod(ui->app, MUIM_Application_NewInput, (IPTR)&sigs);
 
@@ -1984,12 +2336,36 @@ int ui_run(a2h_ui *ui)
             continue;
         }
 
-        if (id >= ID_MEDIA_BASE) {
+        /*
+         * Bounded. This was the last range in the ladder and so was written
+         * open-ended, which quietly swallowed every ID added above it --
+         * the cover buttons and the sliders both landed here and were
+         * dispatched as media transport for a widget that did not exist.
+         * Nothing crashed and nothing happened, which is the worst way for
+         * it to fail.
+         */
+        if (id >= ID_MEDIA_BASE && id < ID_LEVEL_BASE) {
             ULONG rel = id - ID_MEDIA_BASE;
             fire_media(ui, (int)(rel / ID_MEDIA_STRIDE),
                            (int)(rel % ID_MEDIA_STRIDE));
             if (!flush_output(ui))
                 connection_lost(ui, "Send failed");
+            continue;
+        }
+
+        if (id >= ID_COVER_BASE && id < ID_COVER_BASE + 100000) {
+            ULONG off = id - ID_COVER_BASE;
+            fire_cover(ui, (int)(off / ID_COVER_STRIDE),
+                       (int)(off % ID_COVER_STRIDE));
+            if (!flush_output(ui))
+                connection_lost(ui, "Send failed");
+            continue;
+        }
+
+        /* Only parks the value; the settle timer does the sending, so a
+         * drag costs nothing here. */
+        if (id >= ID_LEVEL_BASE && id < ID_LEVEL_BASE + 100000) {
+            level_changed(ui, (int)(id - ID_LEVEL_BASE));
             continue;
         }
 

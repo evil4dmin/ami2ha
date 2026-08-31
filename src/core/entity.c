@@ -369,3 +369,68 @@ const char *ha_entity_attr_next(const ha_entity *e, const char *prev_key,
         *value = e->attrs + off + strlen(e->attrs + off) + 1;
     return e->attrs + off;
 }
+
+/*
+ * Attribute values arrive as the JSON text that was in the message, so a
+ * brightness is "191" and a colour is "[255, 128, 0]". Reading them is
+ * therefore a small parse rather than a cast.
+ */
+int ha_attr_pct(const ha_entity *e, const char *key, int scale255)
+{
+    const char *v = ha_entity_attr(e, key);
+    long        n;
+    char       *end;
+
+    if (!v || !*v)
+        return -1;
+
+    n = strtol(v, &end, 10);
+    if (end == v)
+        return -1;                       /* not a number at all */
+
+    if (scale255) {
+        /*
+         * 0..255 to 0..100, rounded rather than truncated: 255 has to come
+         * out as 100, and half-steps that land on .5 should go up, or a
+         * lamp set to 50% reads back as 49 and the slider jumps under the
+         * user's hand the moment the server answers.
+         */
+        if (n < 0) n = 0;
+        if (n > 255) n = 255;
+        return (int)((n * 100 + 127) / 255);
+    }
+
+    if (n < 0) n = 0;
+    if (n > 100) n = 100;
+    return (int)n;
+}
+
+int ha_attr_rgb(const ha_entity *e, const char *key, int *r, int *g, int *b)
+{
+    const char *v = ha_entity_attr(e, key);
+    long        c[3];
+    int         i;
+    char       *end;
+
+    if (!v)
+        return 0;
+
+    while (*v == ' ' || *v == '[')
+        v++;
+
+    for (i = 0; i < 3; i++) {
+        c[i] = strtol(v, &end, 10);
+        if (end == v)
+            return 0;                    /* fewer than three numbers */
+        if (c[i] < 0)   c[i] = 0;
+        if (c[i] > 255) c[i] = 255;
+        v = end;
+        while (*v == ' ' || *v == ',')
+            v++;
+    }
+
+    if (r) *r = (int)c[0];
+    if (g) *g = (int)c[1];
+    if (b) *b = (int)c[2];
+    return 1;
+}
