@@ -493,23 +493,19 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
     case W_DIMMER:
         /*
          * A slider rather than a checkbox, because a dimmable lamp has a
-         * hundred useful states and two of them are on and off. The
-         * reading beside it is the number people actually want: MUI can
-         * draw the level on the knob, but not while the slider is also
-         * being told what the server says.
+         * hundred useful states and two of them are on and off.
+         *
+         * No reading beside it: the slider draws its own level, so a field
+         * repeating it was saying the same thing twice and taking the
+         * width to do it -- which also left the slider shorter than the
+         * ones in a colour row, so the two did not line up.
          */
         uw->control = MUI_NewObject(MUIC_Slider,
             MUIA_Slider_Min,   (IPTR)0,
             MUIA_Slider_Max,   (IPTR)100,
             MUIA_Slider_Level, (IPTR)0,
             TAG_DONE);
-        uw->value = MUI_NewObject(MUIC_Text,
-            MUIA_Text_Contents, (IPTR)"-",
-            MUIA_Text_PreParse, (IPTR)"\33r",
-            MUIA_Frame,         MUIV_Frame_Text,
-            MUIA_FixWidthTxt,   (IPTR)"8888%",
-            TAG_DONE);
-        if (!uw->control || !uw->value)
+        if (!uw->control)
             return 0;
         uw->onoff = make_onoff();
         if (!uw->onoff)
@@ -519,7 +515,6 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             MUIA_Group_Horiz,  TRUE,
             MUIA_Group_Child,  (IPTR)uw->onoff,
             MUIA_Group_Child,  (IPTR)uw->control,
-            MUIA_Group_Child,  (IPTR)uw->value,
             TAG_DONE));
         return 1;
 
@@ -1487,13 +1482,6 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
             /* And give it that moment before believing it again. */
             uw->armed = ui_now() + SETTLE_TICKS * 2;
         }
-        if (uw->value) {
-            if (pct < 0)
-                strcpy(uw->text, state_is_on(e) ? "on" : "-");
-            else
-                sprintf(uw->text, "%d%%", pct);
-            set(uw->value, MUIA_Text_Contents, (IPTR)uw->text);
-        }
         break;
     }
 
@@ -2038,10 +2026,7 @@ static long pending_tick(a2h_ui *ui)
                 uw->pending = now_val;
                 uw->send_at = now + SETTLE_TICKS;
                 uw->hold    = now + SETTLE_TICKS * 4;
-                if (w->kind == W_DIMMER && uw->value) {
-                    sprintf(uw->text, "%d%%", now_val);
-                    set(uw->value, MUIA_Text_Contents, (IPTR)uw->text);
-                } else if (w->kind == W_COLOR && uw->swatch) {
+                if (w->kind == W_COLOR && uw->swatch) {
                     /* So the preview follows the sliders as they move,
                      * rather than waiting for the lamp to answer. */
                     SetAttrs(uw->swatch,
