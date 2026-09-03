@@ -45,6 +45,15 @@
  */
 #define HA_ATTRS_MAX 320
 
+/*
+ * Light capabilities, from `supported_color_modes`. Home Assistant's names
+ * are onoff, brightness, color_temp, hs, xy, rgb, rgbw, rgbww and white:
+ * anything but plain `onoff` can be dimmed, and the colour ones are the
+ * three spelt with "rgb" plus `hs` and `xy`.
+ */
+#define HA_LIGHT_DIM 0x01           /* brightness can be set             */
+#define HA_LIGHT_RGB 0x02           /* a colour can be set               */
+
 typedef struct ha_entity {
     char entity_id[HA_ENTITY_ID_MAX];
     char state[HA_STATE_MAX];
@@ -54,6 +63,17 @@ typedef struct ha_entity {
 
     char attrs[HA_ATTRS_MAX];
     size_t attrs_len;               /* bytes used, excluding final terminator */
+
+    /*
+     * What a light can actually do, from `supported_color_modes`.
+     *
+     * A flag rather than a stored attribute on purpose. The array itself is
+     * up to 66 characters -- a fifth of the whole attribute budget, for
+     * every light -- and that budget is already tight enough that a media
+     * player's attributes once pushed the fields anyone reads out of the
+     * buffer. One byte answers the only question asked of it.
+     */
+    unsigned char light_caps;       /* HA_LIGHT_* bits, 0 when not a light */
 
     unsigned long seq;              /* bumped on every update             */
     int           changed;          /* set on update, cleared by the UI   */

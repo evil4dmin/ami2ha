@@ -394,6 +394,14 @@ same format.
 
 @node LIGHTS "Dimmers, colour and blinds"
 
+  When entities are chosen by @{b}label@{ub} rather than listed by hand,
+  each light gets the control it can actually use: a light that can do
+  colour gets @{b}color@{ub}, one that can only be dimmed gets
+  @{b}dimmer@{ub}, and one that is only on and off stays @{b}toggle@{ub}.
+  Home Assistant is asked what the light supports, so this is knowledge
+  rather than guesswork -- and a kind written in the configuration file is
+  never overridden, because that is a decision rather than a guess.
+
   @{b}dimmer@{ub} puts a light's brightness on a slider:
 
     group "Licht"

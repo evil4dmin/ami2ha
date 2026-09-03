@@ -106,6 +106,12 @@ typedef struct {
      * themselves, and without this the two are indistinguishable.
      */
     int         label_explicit;
+    /*
+     * The kind was chosen for us from the domain, not written in the file.
+     * Only such a widget may be refined once the states arrive: a `toggle`
+     * someone typed for a colour lamp is a decision, not a guess.
+     */
+    int         kind_auto;
     int         group;                    /* owning group index */
 } a2h_widget;
 
@@ -201,6 +207,13 @@ int cfg_write(const a2h_config *cfg, a2h_buf *out);
  * the dashboard is discovered from Home Assistant rather than written out.
  * Returns 0 if the cap or memory is reached.
  */
+/*
+ * Improve the kinds that were guessed from the domain, now that the states
+ * are in. A light is a checkmark until Home Assistant says it can do more.
+ * Only touches widgets whose kind came from discovery.
+ */
+void cfg_refine_kinds(a2h_config *cfg, ha_store *store);
+
 int cfg_add_discovered(a2h_config *cfg, const char *entity_id,
                        const char *label);
 

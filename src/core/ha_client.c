@@ -14,7 +14,7 @@ static void notify_changed(ha_client *c, ha_entity *e);
 static const char *const skipped_attrs[] = {
     "friendly_name", "unit_of_measurement", "device_class",
     "entity_picture", "supported_features", "attribution",
-    "supported_color_modes", "device_trackers",
+    "device_trackers",
     /*
      * A media_player sends these two ahead of the fields anyone wants to
      * read, and together they cost 140 of the attribute budget: a real
@@ -260,6 +260,27 @@ static void apply_attributes(ha_entity *e, const char *at, size_t len)
         } else if (strcmp(key, "device_class") == 0 && vt == JSON_STRING) {
             json_str_copy(&tok, val, sizeof val);
             ha_entity_set_class(e, val);
+        } else if (strcmp(key, "supported_color_modes") == 0 &&
+                   vt == JSON_ARRAY_BEGIN) {
+            /*
+             * Read, not stored. What the dashboard wants to know is "can
+             * this be dimmed, can it be coloured", and the answer fits in
+             * two bits -- where the array itself would cost a fifth of the
+             * attribute budget for every light on the dashboard.
+             *
+             * `onoff` is the one mode that means neither.
+             */
+            while (json_next(&jp, &tok) == JSON_STRING) {
+                char mode[20];
+
+                json_str_copy(&tok, mode, sizeof mode);
+                if (strcmp(mode, "onoff") != 0)
+                    e->light_caps |= HA_LIGHT_DIM;
+                if (strncmp(mode, "rgb", 3) == 0 ||
+                    strcmp(mode, "hs") == 0 ||
+                    strcmp(mode, "xy") == 0)
+                    e->light_caps |= HA_LIGHT_RGB;
+            }
         } else if (is_skipped_attr(key)) {
             json_skip(&jp, &tok);
         } else {

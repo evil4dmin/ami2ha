@@ -200,6 +200,72 @@ static void test_camera_discovered_from_label(void)
     cfg_free(&cfg);
 }
 
+/*
+ * A discovered light is a checkmark until Home Assistant says otherwise,
+ * and a kind written by hand is never second-guessed.
+ */
+static void test_refine_light_kinds(void)
+{
+    a2h_config cfg;
+    ha_store   st;
+    ha_entity *e;
+    char       err[CFG_ERR_MAX];
+
+    CHECK(ha_store_init(&st, 0));
+
+    e = ha_store_put(&st, "light.strip");        /* colour capable */
+    CHECK(e != NULL);
+    e->light_caps = HA_LIGHT_DIM | HA_LIGHT_RGB;
+
+    e = ha_store_put(&st, "light.dimmable");     /* brightness only */
+    CHECK(e != NULL);
+    e->light_caps = HA_LIGHT_DIM;
+
+    e = ha_store_put(&st, "light.plain");        /* onoff only */
+    CHECK(e != NULL);
+    e->light_caps = 0;
+
+    e = ha_store_put(&st, "switch.pump");        /* not a light at all */
+    CHECK(e != NULL);
+
+    cfg_init(&cfg);
+    CHECK(cfg_add_discovered(&cfg, "light.strip",    "amiga"));
+    CHECK(cfg_add_discovered(&cfg, "light.dimmable", "amiga"));
+    CHECK(cfg_add_discovered(&cfg, "light.plain",    "amiga"));
+    CHECK(cfg_add_discovered(&cfg, "switch.pump",    "amiga"));
+
+    /* All four start as checkmarks: the domain is all discovery knows. */
+    CHECK_INT(cfg.widgets[0].kind, W_TOGGLE);
+    CHECK_INT(cfg.widgets[3].kind, W_TOGGLE);
+
+    cfg_refine_kinds(&cfg, &st);
+
+    CHECK_INT(cfg.widgets[0].kind, W_COLOR);   /* colour wins over dimming */
+    CHECK_INT(cfg.widgets[1].kind, W_DIMMER);
+    CHECK_INT(cfg.widgets[2].kind, W_TOGGLE);  /* nothing to refine */
+    CHECK_INT(cfg.widgets[3].kind, W_TOGGLE);  /* a switch is left alone */
+    cfg_free(&cfg);
+
+    /* A hand-written kind is a decision, not a guess. */
+    CHECK(parse(&cfg,
+        "group \"Licht\"\n"
+        "    toggle light.strip\n"
+        "end\n", err, sizeof err));
+    CHECK_INT(cfg.widgets[0].kind, W_TOGGLE);
+    cfg_refine_kinds(&cfg, &st);
+    CHECK_INT(cfg.widgets[0].kind, W_TOGGLE);
+    cfg_free(&cfg);
+
+    /* An entity the store has never heard of must not crash or change. */
+    cfg_init(&cfg);
+    CHECK(cfg_add_discovered(&cfg, "light.absent", "amiga"));
+    cfg_refine_kinds(&cfg, &st);
+    CHECK_INT(cfg.widgets[0].kind, W_TOGGLE);
+    cfg_free(&cfg);
+
+    ha_store_free(&st);
+}
+
 static void test_media_widget(void)
 {
     a2h_config cfg, back;
@@ -938,6 +1004,7 @@ void suite_config(void)
     RUN(test_discovered_labels_are_not_explicit);
     RUN(test_camera_timestamp_is_optional);
     RUN(test_camera_timestamp_survives_a_write);
+    RUN(test_refine_light_kinds);
     RUN(test_media_widget);
     RUN(test_media_discovered_from_label);
     RUN(test_dimmer_color_and_cover);

@@ -651,8 +651,9 @@ int cfg_add_discovered(a2h_config *cfg, const char *entity_id,
 
     w = &cfg->widgets[cfg->nwidgets];
     memset(w, 0, sizeof *w);
-    w->kind     = kind_for_domain(dom);
-    w->group    = 0;
+    w->kind      = kind_for_domain(dom);
+    w->kind_auto = 1;
+    w->group     = 0;
     w->min      = 0;
     w->max      = 100;
     w->decimals = 1;
@@ -681,6 +682,45 @@ int cfg_add_discovered(a2h_config *cfg, const char *entity_id,
     cfg->groups[0].nwidgets++;
     cfg->nwidgets++;
     return 1;
+}
+
+void cfg_refine_kinds(a2h_config *cfg, ha_store *store)
+{
+    int i;
+
+    if (!cfg || !store)
+        return;
+
+    for (i = 0; i < cfg->nwidgets; i++) {
+        a2h_widget      *w = &cfg->widgets[i];
+        const ha_entity *e;
+
+        /*
+         * A kind written in the file is never second-guessed, and only a
+         * light has anything to refine -- everything else the domain
+         * already answers exactly.
+         */
+        if (!w->kind_auto || w->kind != W_TOGGLE)
+            continue;
+        if (strncmp(w->entity, "light.", 6) != 0)
+            continue;
+
+        e = ha_store_get(store, w->entity);
+        if (!e)
+            continue;
+
+        /*
+         * Colour before brightness: a colour control carries its own on/off
+         * box, so nothing is lost, and a strip that can do colour is
+         * overwhelmingly wanted for colour. A lamp that only dims gets the
+         * slider. One that can do neither stays a checkmark, which is still
+         * the right answer for most bulbs.
+         */
+        if (e->light_caps & HA_LIGHT_RGB)
+            w->kind = W_COLOR;
+        else if (e->light_caps & HA_LIGHT_DIM)
+            w->kind = W_DIMMER;
+    }
 }
 
 int cfg_generate(a2h_buf *out, const ha_store *store, const a2h_config *base)
@@ -749,9 +789,26 @@ int cfg_generate(a2h_buf *out, const ha_store *store, const a2h_config *base)
                 continue;
 
             k = kind_for_domain(dom);
+            /*
+             * The generator has the states in hand, so it can be as smart
+             * as the dashboard is: writing `toggle` for an RGB strip here
+             * would just hand someone a file they have to correct.
+             */
+            if (k == W_TOGGLE && strcmp(dom, "light") == 0) {
+                if (e->light_caps & HA_LIGHT_RGB)
+                    k = W_COLOR;
+                else if (e->light_caps & HA_LIGHT_DIM)
+                    k = W_DIMMER;
+            }
             switch (k) {
             case W_TOGGLE:
                 buf_printf(out, "    toggle %s", e->entity_id);
+                break;
+            case W_DIMMER:
+                buf_printf(out, "    dimmer %s", e->entity_id);
+                break;
+            case W_COLOR:
+                buf_printf(out, "    color  %s", e->entity_id);
                 break;
             case W_BUTTON:
                 /* scene/script/button are all triggered by turn_on except

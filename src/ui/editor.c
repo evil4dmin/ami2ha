@@ -425,10 +425,15 @@ static int apply_order(a2h_editor *ed)
                         row_fill(&ed->used[i], ed->ha, kept->entity,
                                  kept->label, kept->kind);
                     } else {
-                        /* Genuinely new: infer a sensible widget. */
+                        /* Genuinely new: infer a sensible widget. The
+                         * states are already in here, so the guess from the
+                         * domain can be improved straight away -- a colour
+                         * lamp added in this window gets a colour control,
+                         * the same as one found by label at startup. */
                         a2h_config tmp;
                         cfg_init(&tmp);
                         if (cfg_add_discovered(&tmp, ed->used[i].entity, NULL)) {
+                            cfg_refine_kinds(&tmp, &ed->ha->store);
                             rebuilt[out] = tmp.widgets[0];
                             row_fill(&ed->used[i], ed->ha, ed->used[i].entity,
                                      tmp.widgets[0].label, tmp.widgets[0].kind);

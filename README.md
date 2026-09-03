@@ -270,6 +270,15 @@ tokenfile  S:ha.token
 label      amiga
 ```
 
+Each entity gets the widget its domain calls for, and lights get the one
+their capabilities call for: a light that can do colour gets a `color`
+control, one that can only be dimmed gets a `dimmer`, and one that is just
+on and off stays a `toggle`. Home Assistant is asked what each light
+supports rather than guessed at, so an RGB strip arrives as an RGB strip.
+
+A kind you wrote yourself is never overridden — `toggle light.strip` stays a
+checkmark even for a light that could do more.
+
 For an `https://` server add `tls yes` (and `tlsverify no` if the
 certificate is self-signed).
 

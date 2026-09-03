@@ -980,6 +980,13 @@ int main(int argc, char **argv)
          * given -- the friendly name is a better guess than an entity id,
          * but never better than what someone chose deliberately.
          */
+        /*
+         * Same reason as the captions below: the domain was all we knew
+         * when the list arrived, and "light" alone cannot tell a plain bulb
+         * from an RGB strip. Home Assistant can, so ask it now.
+         */
+        cfg_refine_kinds(dash, &app.ha.store);
+
         if (dash->label[0]) {
             int i;
             for (i = 0; i < dash->nwidgets; i++) {
