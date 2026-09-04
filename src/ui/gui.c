@@ -1042,11 +1042,24 @@ void ui_rebuild(a2h_ui *ui)
     ui_refresh_all(ui);
 }
 
-a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
-                  const char *cfgpath, char *err, size_t errsz)
+/*
+ * `scrolled` puts the dashboard in a Scrollgroup so the window may be
+ * smaller than what it holds. See ui_create below for why that is a second
+ * attempt rather than how it is always built.
+ *
+ * `no_fit` is set when the failure was specifically the window refusing to
+ * open, which is the one failure worth retrying.
+ */
+static a2h_ui *ui_build(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
+                        const char *cfgpath, int scrolled, int *no_fit,
+                        char *err, size_t errsz)
 {
     a2h_ui *ui;
     Object *root;
+    Object *inner;
+
+    if (no_fit)
+        *no_fit = 0;
 
     if (!ui_libs_open()) {
         strncpy(err, "cannot open muimaster.library (is MUI installed?)",
@@ -1095,6 +1108,29 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
         return NULL;
     }
 
+    /*
+     * A Virtgroup reports a small minimum size and scrolls what it holds,
+     * which is the whole point: the window can then be smaller than the
+     * dashboard. The status line stays outside it, so it is always on
+     * show rather than scrolling away.
+     */
+    inner = root;
+    if (scrolled) {
+        Object *virt = MUI_NewObject(MUIC_Virtgroup,
+            MUIA_Group_Child, (IPTR)root,
+            TAG_DONE);
+
+        inner = virt ? MUI_NewObject(MUIC_Scrollgroup,
+            MUIA_Scrollgroup_Contents, (IPTR)virt,
+            TAG_DONE) : NULL;
+        if (!inner) {
+            strncpy(err, "could not create MUI objects", errsz - 1);
+            free(ui);
+            ui_libs_close();
+            return NULL;
+        }
+    }
+
     ui->win = MUI_NewObject(MUIC_Window,
         MUIA_Window_Title,     (IPTR)A2H_TITLE,
         /* What the Workbench title bar shows while this window is at the
@@ -1102,8 +1138,14 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
          * text whenever the settings window is the active one. */
         MUIA_Window_ScreenTitle,(IPTR)A2H_TITLE,
         MUIA_Window_ID,        (IPTR)A2H_MAKE_ID('A','2','H','A'),
+        /* Scrolling only helps if the window is allowed to be big: left to
+         * itself a Scrollgroup asks for its minimum, which is tiny. */
+        MUIA_Window_Height,    scrolled ? (IPTR)MUIV_Window_Height_Screen(85)
+                                        : (IPTR)MUIV_Window_Height_Default,
+        MUIA_Window_Width,     scrolled ? (IPTR)MUIV_Window_Width_Screen(85)
+                                        : (IPTR)MUIV_Window_Width_Default,
         MUIA_Window_RootObject,(IPTR)MUI_NewObject(MUIC_Group,
-            MUIA_Group_Child, (IPTR)root,
+            MUIA_Group_Child, (IPTR)inner,
             MUIA_Group_Child, (IPTR)ui->status,
             TAG_DONE),
         TAG_DONE);
@@ -1183,6 +1225,8 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
     set(ui->win, MUIA_Window_Open, TRUE);
     if (!xget(ui->win, MUIA_Window_Open)) {
         strncpy(err, "could not open the window", errsz - 1);
+        if (no_fit)
+            *no_fit = 1;
         MUI_DisposeObject(ui->app);
         free(ui->widgets);
         free(ui);
@@ -1191,6 +1235,42 @@ a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
     }
 
     err[0] = '\0';
+    return ui;
+}
+
+/*
+ * MUI will not open a window whose contents cannot fit the screen, and a
+ * dashboard has no say in the matter: a camera tile is a fixed number of
+ * pixels, so no amount of squeezing makes the layout smaller. Label thirty
+ * entities in Home Assistant on a 640x480 Workbench and the first run ends
+ * at "could not open the window", which tells nobody anything.
+ *
+ * So: build it the plain way first, because that is the right window for a
+ * dashboard that fits -- no scrollbars around something that does not need
+ * them. Only if the window refuses to open is it built again inside a
+ * Scrollgroup, which can be as small as the screen and scrolls the rest.
+ *
+ * Two builds rather than always scrolling, and a retry rather than
+ * measuring: MUI already answers "does this fit" exactly, at the moment the
+ * window opens, and reproducing that arithmetic here would be guesswork
+ * about the user's font and frames.
+ */
+a2h_ui *ui_create(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
+                  const char *cfgpath, char *err, size_t errsz)
+{
+    a2h_ui *ui;
+    int     no_fit = 0;
+
+    ui = ui_build(cfg, ha, sock, cfgpath, 0, &no_fit, err, errsz);
+    if (ui || !no_fit)
+        return ui;
+
+    printf("ami2ha: the dashboard does not fit the screen -- "
+           "it scrolls instead\n");
+    ui = ui_build(cfg, ha, sock, cfgpath, 1, NULL, err, errsz);
+    if (!ui)
+        strncpy(err, "the dashboard does not fit this screen, and it could "
+                     "not be made to scroll either", errsz - 1);
     return ui;
 }
 

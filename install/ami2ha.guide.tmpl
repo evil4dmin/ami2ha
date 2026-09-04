@@ -320,6 +320,17 @@ The window is built from a configuration file. You can edit it in the
 @{"settings window" link SETTINGS} or in a text editor; both write the
 same format.
 
+@{b}If it does not fit the screen@{ub}, the dashboard scrolls: the window
+opens at most of the screen with scrollbars, and the status line stays put
+at the bottom. Nothing needs setting for that -- it happens only when
+needed, so a dashboard that fits has no scrollbars around it.
+
+It is worth knowing because MUI will not open a window smaller than what it
+holds, and a camera tile is a fixed number of pixels: label a couple of
+dozen entities with two cameras among them on a 640x480 Workbench and there
+is no arrangement of @{b}columns@{ub} that fits. Scrolling is what makes
+that work rather than fail.
+
 @{b}The file@{ub}
 
   host       192.168.1.100

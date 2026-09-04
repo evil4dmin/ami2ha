@@ -203,6 +203,13 @@ labelled `Einfahrt` saves as `Einfahrt-20260828-102900.jpg`. Snapshots go to
 savedir    Work:ami2ha-shots
 ```
 
+A dashboard larger than the screen scrolls — the window opens at most of the
+screen with scrollbars and the status line stays visible. That happens only
+when it is needed, so a dashboard that fits has no scrollbars around it.
+Worth knowing because MUI will not open a window smaller than its contents,
+and a camera tile is a fixed size: with two cameras and a couple of dozen
+entities on a small Workbench, no arrangement of `columns` would fit.
+
 Widget kinds are `sensor`, `toggle`, `gauge`, `button`, `text`, `camera`,
 `media`, `dimmer`, `color` and `cover`.
 
